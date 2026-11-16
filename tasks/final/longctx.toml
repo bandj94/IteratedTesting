@@ -1,0 +1,14 @@
+# Long-context tracing, held-out ("final") split.
+
+[[context]]
+id = "lc12k"
+seed = 404
+target_tokens = 12000
+questions = 2
+lite = true
+
+[[context]]
+id = "lc20k"
+seed = 505
+target_tokens = 20000
+questions = 2

@@ -1,0 +1,227 @@
+# Tool calling, tuning split. Each task sends a short conversation plus tool definitions and checks the
+# model's reply: the right tool with the right arguments, or a direct answer when no tool is needed.
+# `example` is a correct reply, used only by `iterbench validate` to test the expectation itself.
+
+[[task]]
+id = "tc01"
+lite = true
+tools = ["read_file", "write_file", "search_code", "run_command", "list_dir"]
+[[task.messages]]
+role = "user"
+content = "Open src/config/loader.py so I can see how the settings are parsed."
+[task.expect]
+type = "call"
+name = "read_file"
+args = { path = { path = "src/config/loader.py" } }
+[task.example]
+name = "read_file"
+args = { path = "src/config/loader.py" }
+
+[[task]]
+id = "tc02"
+tools = ["read_file", "search_code", "run_command", "list_dir"]
+[[task.messages]]
+role = "user"
+content = "Run only the tests in tests/test_api.py, with verbose output."
+[task.expect]
+type = "call"
+name = "run_command"
+args = { command = { contains_any = ["tests/test_api.py", "tests\\test_api.py", "tests.test_api"], regex = '(?:^|\s)(?:-v+|--verbose)(?:\s|$)' } }
+[task.example]
+name = "run_command"
+args = { command = "python -m pytest tests/test_api.py -v" }
+
+[[task]]
+id = "tc03"
+tools = ["read_file", "search_code", "run_command", "list_dir"]
+[[task.messages]]
+role = "user"
+content = "Where is the function parse_duration defined in this repo?"
+[task.expect]
+type = "call"
+name = "search_code"
+args = { pattern = { contains = ["parse_duration"] } }
+[task.example]
+name = "search_code"
+args = { pattern = "def parse_duration" }
+
+[[task]]
+id = "tc04"
+lite = true
+tools = ["read_file", "edit_file", "write_file", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "In app/settings.py, change MAX_RETRIES = 3 to MAX_RETRIES = 5."
+[task.expect]
+type = "call"
+[[task.expect.any_of]]
+name = "edit_file"
+args = { path = { path = "app/settings.py" }, old_text = { contains = ["MAX_RETRIES = 3"] }, new_text = { contains = ["MAX_RETRIES = 5"] } }
+[[task.expect.any_of]]
+name = "read_file"
+args = { path = { path = "app/settings.py" } }
+[[task.expect.any_of]]
+name = "search_code"
+args = { pattern = { contains = ["MAX_RETRIES"] } }
+[task.example]
+name = "edit_file"
+args = { path = "app/settings.py", old_text = "MAX_RETRIES = 3", new_text = "MAX_RETRIES = 5" }
+
+[[task]]
+id = "tc05"
+tools = ["create_ticket", "web_fetch", "run_command"]
+[[task.messages]]
+role = "user"
+content = "File a high priority ticket titled 'Rotate staging certificates', due March 3, 2027, labeled ops and security."
+[task.expect]
+type = "call"
+name = "create_ticket"
+args = { title = { iequals = "Rotate staging certificates" }, priority = { equals = "high" }, due_date = { equals = "2027-03-03" }, labels = { set = ["ops", "security"] } }
+[task.example]
+name = "create_ticket"
+args = { title = "Rotate staging certificates", priority = "high", due_date = "2027-03-03", labels = ["ops", "security"] }
+
+[[task]]
+id = "tc06"
+lite = true
+tools = ["read_file", "search_code", "run_command", "web_fetch"]
+[[task.messages]]
+role = "user"
+content = "In one sentence: what does the acronym CRUD stand for?"
+[task.expect]
+type = "answer"
+contains_all = ["create", "read", "update", "delete"]
+[task.example]
+answer = "CRUD stands for Create, Read, Update, Delete."
+
+[[task]]
+id = "tc07"
+tools = ["read_file", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "How many TODO comments are there under src/?"
+[[task.messages]]
+role = "assistant"
+content = ""
+tool_calls = [{ id = "call_1", name = "search_code", arguments = '{"pattern": "TODO", "path": "src"}' }]
+[[task.messages]]
+role = "tool"
+tool_call_id = "call_1"
+content = '''
+src/app.py:12:    # TODO: handle timeouts from the payment gateway
+src/app.py:40:    # TODO: add retries with backoff
+src/util/io.py:7:    # TODO: close file handles on error
+'''
+[task.expect]
+type = "answer"
+contains_any = ["3", "three"]
+[task.example]
+answer = "There are 3 TODO comments under src/: two in src/app.py and one in src/util/io.py."
+
+[[task]]
+id = "tc08"
+tools = ["read_file", "edit_file", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "The test suite is failing. Please investigate."
+[[task.messages]]
+role = "assistant"
+content = ""
+tool_calls = [{ id = "call_1", name = "run_command", arguments = '{"command": "python -m pytest -q"}' }]
+[[task.messages]]
+role = "tool"
+tool_call_id = "call_1"
+content = '''
+F.....                                                                   [100%]
+================================== FAILURES ===================================
+________________________________ test_divide __________________________________
+
+    def test_divide():
+>       assert divide(7, 2) == 3.5
+E       assert 3 == 3.5
+
+tests/test_mathutils.py:9: AssertionError
+  in divide at src/mathutils.py:14
+=========================== short test summary info ===========================
+FAILED tests/test_mathutils.py::test_divide - assert 3 == 3.5
+1 failed, 5 passed in 0.12s
+'''
+[task.expect]
+type = "call"
+[[task.expect.any_of]]
+name = "read_file"
+args = { path = { path = "src/mathutils.py" } }
+[[task.expect.any_of]]
+name = "search_code"
+args = { pattern = { contains = ["divide"] } }
+[[task.expect.any_of]]
+name = "read_file"
+args = { path = { path = "tests/test_mathutils.py" } }
+[task.example]
+name = "read_file"
+args = { path = "src/mathutils.py" }
+
+[[task]]
+id = "tc09"
+tools = ["read_file", "write_file", "edit_file", "run_command"]
+[[task.messages]]
+role = "user"
+content = '''
+Create the file notes/todo.md containing exactly these two lines:
+- [ ] fix "quote" handling
+- [ ] add tests for C:\temp paths
+'''
+[task.expect]
+type = "call"
+name = "write_file"
+args = { path = { path = "notes/todo.md" }, content = { text = '''
+- [ ] fix "quote" handling
+- [ ] add tests for C:\temp paths''' } }
+[task.example]
+name = "write_file"
+args = { path = "notes/todo.md", content = '''
+- [ ] fix "quote" handling
+- [ ] add tests for C:\temp paths
+''' }
+
+[[task]]
+id = "tc10"
+tools = ["read_file", "list_dir", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "What's inside the docs folder?"
+[task.expect]
+type = "call"
+name = "list_dir"
+args = { path = { path = "docs" } }
+[task.example]
+name = "list_dir"
+args = { path = "docs" }
+
+[[task]]
+id = "tc11"
+tools = ["read_file", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "Run npm test, but don't let it run for more than two minutes."
+[task.expect]
+type = "call"
+name = "run_command"
+args = { command = { contains = ["npm test"] }, timeout_s = { number = 120 } }
+[task.example]
+name = "run_command"
+args = { command = "npm test", timeout_s = 120 }
+
+[[task]]
+id = "tc12"
+tools = ["read_file", "write_file", "edit_file", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "I want to add a slugify(text) helper to src/text_utils.py. Before changing anything, look at what's in that file now."
+[task.expect]
+type = "call"
+name = "read_file"
+args = { path = { path = "src/text_utils.py" } }
+[task.example]
+name = "read_file"
+args = { path = "src/text_utils.py" }

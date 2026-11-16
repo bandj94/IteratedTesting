@@ -1,0 +1,5 @@
+weight = 2
+max_turns = 14
+prompt = '''
+Some tests in tests/ fail. Fix the code in convert.py and add the missing function described in its TODO comment so that every test passes. Do not modify the tests.
+'''

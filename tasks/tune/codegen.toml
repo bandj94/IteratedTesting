@@ -1,0 +1,1181 @@
+# Code generation, tuning split. Original problems. Each has a precise spec, a reference solution and
+# hidden checks (the model never sees `reference` or `tests`). `lite = true` marks the small subset
+# used for very slow models.
+
+[[task]]
+id = "cg01"
+entry = "parse_duration"
+prompt = '''
+Write a Python function `parse_duration(text: str) -> int` that converts a compact duration string into a number of seconds.
+
+Rules:
+- The string is one or more `<number><unit>` parts with no spaces, for example "1h30m", "45s", "2d" or "1d2h3m4s".
+- Units are `d` (86400 seconds), `h` (3600), `m` (60) and `s` (1). Units are lowercase.
+- Each unit may appear at most once, and units must appear in the order d, h, m, s ("1m1h" is invalid).
+- Numbers are non-negative integers written with the digits 0-9 only (no sign, no decimal point). Leading zeros are allowed ("05m" is 300).
+- Raise `ValueError` for anything that does not follow these rules, including the empty string, unknown units, a number without a unit, a unit without a number, and any whitespace.
+
+Examples:
+parse_duration("1h30m") == 5400
+parse_duration("2d") == 172800
+parse_duration("0s") == 0
+'''
+reference = '''
+import re
+
+def parse_duration(text):
+    if not isinstance(text, str) or not text:
+        raise ValueError("empty duration")
+    m = re.fullmatch(r"(?:([0-9]+)d)?(?:([0-9]+)h)?(?:([0-9]+)m)?(?:([0-9]+)s)?", text)
+    if not m or not any(m.groups()):
+        raise ValueError("invalid duration: %r" % text)
+    total = 0
+    for value, size in zip(m.groups(), (86400, 3600, 60, 1)):
+        if value is not None:
+            total += int(value) * size
+    return total
+'''
+tests = '''
+check(lambda: parse_duration("1h30m"), 5400)
+check(lambda: parse_duration("45s"), 45)
+check(lambda: parse_duration("2d"), 172800)
+check(lambda: parse_duration("1d2h3m4s"), 93784)
+check(lambda: parse_duration("90m"), 5400)
+check(lambda: parse_duration("0s"), 0)
+check(lambda: parse_duration("05m"), 300)
+check(lambda: parse_duration("3h4s"), 10804)
+check(lambda: parse_duration("100000s"), 100000)
+for bad in ["", "1x", "1m1h", "1h1h", "h", "1.5h", "-1h", "1h 30m", " 1h", "10", "1H", "1h30", "d1"]:
+    check_raises((lambda b=bad: parse_duration(b)), ValueError, label=repr(bad))
+'''
+
+[[task]]
+id = "cg02"
+entry = "compress_ranges"
+lite = true
+prompt = '''
+Write a Python function `compress_ranges(nums: list[int]) -> str`.
+
+Sort the distinct values of `nums` and describe them compactly:
+- A run of three or more consecutive integers is written as `start-end`.
+- Values that are not part of such a run (including runs of exactly two) are written individually.
+- Items are joined with commas and no spaces.
+- Negative numbers keep their minus sign, so the run -3, -2, -1 is written "-3--1".
+- An empty list gives "".
+
+Examples:
+compress_ranges([1, 2, 3, 5, 6, 8, 9, 10, 11]) == "1-3,5,6,8-11"
+compress_ranges([4, 4, 2]) == "2,4"
+'''
+reference = '''
+def compress_ranges(nums):
+    vals = sorted(set(nums))
+    out, i = [], 0
+    while i < len(vals):
+        j = i
+        while j + 1 < len(vals) and vals[j + 1] == vals[j] + 1:
+            j += 1
+        if j - i >= 2:
+            out.append("%d-%d" % (vals[i], vals[j]))
+        else:
+            out.extend(str(v) for v in vals[i:j + 1])
+        i = j + 1
+    return ",".join(out)
+'''
+tests = '''
+check(lambda: compress_ranges([1, 2, 3, 5, 6, 8, 9, 10, 11]), "1-3,5,6,8-11")
+check(lambda: compress_ranges([]), "")
+check(lambda: compress_ranges([7]), "7")
+check(lambda: compress_ranges([4, 4, 2]), "2,4")
+check(lambda: compress_ranges([3, 2, 1]), "1-3")
+check(lambda: compress_ranges([1, 2]), "1,2")
+check(lambda: compress_ranges([-3, -2, -1, 1]), "-3--1,1")
+check(lambda: compress_ranges([-1, 0, 1]), "-1-1")
+check(lambda: compress_ranges([10, 12, 11, 11, 14, 15]), "10-12,14,15")
+check(lambda: compress_ranges([0, 2, 4, 5, 6, 7, 100]), "0,2,4-7,100")
+check(lambda: compress_ranges([-5, -4]), "-5,-4")
+'''
+
+[[task]]
+id = "cg03"
+entry = "bump_version"
+prompt = '''
+Write a Python function `bump_version(version: str, part: str) -> str`.
+
+A version is "MAJOR.MINOR.PATCH", optionally followed by "-pre.N". MAJOR, MINOR, PATCH and N are non-negative integers written without leading zeros (a single "0" is fine), and N >= 1.
+
+`part` is one of "major", "minor", "patch", "pre":
+- "major": MAJOR+1, MINOR and PATCH reset to 0, any pre-release suffix removed.
+- "minor": MINOR+1, PATCH reset to 0, suffix removed.
+- "patch": if the version has a pre-release suffix, only remove the suffix (1.4.0-pre.2 -> 1.4.0); otherwise PATCH+1.
+- "pre": if the version has a suffix "-pre.N", increase N by one; otherwise increase PATCH by one and add "-pre.1".
+
+Raise ValueError for an invalid version string or an unknown part.
+
+Examples:
+bump_version("1.2.3", "minor") == "1.3.0"
+bump_version("1.2.3", "pre") == "1.2.4-pre.1"
+bump_version("1.2.4-pre.1", "pre") == "1.2.4-pre.2"
+bump_version("1.2.4-pre.2", "patch") == "1.2.4"
+'''
+reference = '''
+import re
+
+def bump_version(version, part):
+    m = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-pre\.([1-9][0-9]*))?", version)
+    if not m:
+        raise ValueError("invalid version %r" % version)
+    major, minor, patch = (int(g) for g in m.groups()[:3])
+    pre = int(m.group(4)) if m.group(4) else None
+    if part == "major":
+        return "%d.0.0" % (major + 1)
+    if part == "minor":
+        return "%d.%d.0" % (major, minor + 1)
+    if part == "patch":
+        return "%d.%d.%d" % (major, minor, patch if pre is not None else patch + 1)
+    if part == "pre":
+        if pre is not None:
+            return "%d.%d.%d-pre.%d" % (major, minor, patch, pre + 1)
+        return "%d.%d.%d-pre.1" % (major, minor, patch + 1)
+    raise ValueError("unknown part %r" % part)
+'''
+tests = '''
+check(lambda: bump_version("1.2.3", "major"), "2.0.0")
+check(lambda: bump_version("1.2.3", "minor"), "1.3.0")
+check(lambda: bump_version("1.2.3", "patch"), "1.2.4")
+check(lambda: bump_version("1.2.3", "pre"), "1.2.4-pre.1")
+check(lambda: bump_version("1.2.4-pre.1", "pre"), "1.2.4-pre.2")
+check(lambda: bump_version("1.2.4-pre.9", "pre"), "1.2.4-pre.10")
+check(lambda: bump_version("1.2.4-pre.2", "patch"), "1.2.4")
+check(lambda: bump_version("1.2.4-pre.2", "minor"), "1.3.0")
+check(lambda: bump_version("0.9.9-pre.3", "major"), "1.0.0")
+check(lambda: bump_version("0.0.0", "patch"), "0.0.1")
+check(lambda: bump_version("10.20.30", "minor"), "10.21.0")
+for bad in ["1.2", "01.2.3", "1.02.3", "1.2.3-pre.0", "1.2.3-rc.1", "1.2.3-pre.01", "v1.2.3", "1.2.3-pre", "1.2.3.4", ""]:
+    check_raises((lambda b=bad: bump_version(b, "pre")), ValueError, label=repr(bad))
+check_raises(lambda: bump_version("1.2.3", "build"), ValueError)
+'''
+
+[[task]]
+id = "cg04"
+entry = "top_words"
+prompt = '''
+Write a Python function `top_words(text: str, k: int) -> list[str]`.
+
+A word is a maximal run of ASCII letters (a-z, A-Z) and apostrophes; after finding a run, strip leading and trailing apostrophes from it, and ignore it if nothing is left. Compare words case-insensitively and return them in lowercase.
+
+Return the k most frequent words, most frequent first. Break ties by the position of each word's first occurrence in the text (earlier first). If there are fewer than k distinct words, return all of them. k is >= 0.
+
+Examples:
+top_words("The cat and the hat. THE end, cat!", 2) == ["the", "cat"]
+top_words("'Tis the season, isn't it? 'tis!", 1) == ["tis"]
+'''
+reference = '''
+import re
+
+def top_words(text, k):
+    counts, first = {}, {}
+    for i, raw in enumerate(re.findall(r"[A-Za-z']+", text)):
+        w = raw.strip("'").lower()
+        if not w:
+            continue
+        if w not in counts:
+            counts[w] = 0
+            first[w] = i
+        counts[w] += 1
+    return sorted(counts, key=lambda w: (-counts[w], first[w]))[:k]
+'''
+tests = '''
+check(lambda: top_words("The cat and the hat. THE end, cat!", 2), ["the", "cat"])
+check(lambda: top_words("'Tis the season, isn't it? 'tis!", 1), ["tis"])
+check(lambda: top_words("b a b a c", 3), ["b", "a", "c"])
+check(lambda: top_words("one two three", 10), ["one", "two", "three"])
+check(lambda: top_words("x y z", 0), [])
+check(lambda: top_words("", 3), [])
+check(lambda: top_words("'' ' -- 42", 2), [])
+check(lambda: top_words("Don't stop. DON'T! don't", 1), ["don't"])
+check(lambda: top_words("rock'n'roll rock rock'n'roll", 2), ["rock'n'roll", "rock"])
+check(lambda: top_words("e-mail e mail", 2), ["e", "mail"])
+check(lambda: top_words("café cafe", 2), ["caf", "cafe"])
+check(lambda: top_words("a1b2 b", 2), ["b", "a"])
+'''
+
+[[task]]
+id = "cg05"
+entry = "eval_rpn"
+lite = true
+prompt = '''
+Write a Python function `eval_rpn(tokens: list[str]) -> int` that evaluates a program for a small stack machine.
+
+Each token is either an integer literal (digits, optionally with a leading "-", e.g. "-7") or one of these operators:
+- "+", "-", "*": pop b, then pop a, push a op b.
+- "/": pop b, then pop a, push a divided by b truncated toward zero (so -7 / 2 is -3). Raise ZeroDivisionError if b is 0.
+- "neg": pop a, push -a.
+- "dup": push a copy of the top value.
+- "swap": exchange the two top values.
+
+At the end exactly one value must remain on the stack; return it. Raise ValueError for an unknown token, for an operator that needs more values than the stack holds, or if the stack does not end with exactly one value.
+
+Examples:
+eval_rpn(["3", "4", "+", "2", "*"]) == 14
+eval_rpn(["-7", "2", "/"]) == -3
+eval_rpn(["5", "dup", "*", "neg"]) == -25
+'''
+reference = '''
+import re
+
+def eval_rpn(tokens):
+    stack = []
+
+    def need(n):
+        if len(stack) < n:
+            raise ValueError("stack underflow")
+
+    for tok in tokens:
+        if tok in ("+", "-", "*", "/"):
+            need(2)
+            b = stack.pop()
+            a = stack.pop()
+            if tok == "+":
+                stack.append(a + b)
+            elif tok == "-":
+                stack.append(a - b)
+            elif tok == "*":
+                stack.append(a * b)
+            else:
+                if b == 0:
+                    raise ZeroDivisionError("division by zero")
+                q = abs(a) // abs(b)
+                stack.append(q if (a >= 0) == (b >= 0) else -q)
+        elif tok == "neg":
+            need(1)
+            stack.append(-stack.pop())
+        elif tok == "dup":
+            need(1)
+            stack.append(stack[-1])
+        elif tok == "swap":
+            need(2)
+            stack[-1], stack[-2] = stack[-2], stack[-1]
+        elif re.fullmatch(r"-?[0-9]+", tok):
+            stack.append(int(tok))
+        else:
+            raise ValueError("unknown token %r" % tok)
+    if len(stack) != 1:
+        raise ValueError("the stack must end with exactly one value")
+    return stack[0]
+'''
+tests = '''
+check(lambda: eval_rpn(["3", "4", "+", "2", "*"]), 14)
+check(lambda: eval_rpn(["-7", "2", "/"]), -3)
+check(lambda: eval_rpn(["7", "-2", "/"]), -3)
+check(lambda: eval_rpn(["-8", "2", "/"]), -4)
+check(lambda: eval_rpn(["-9", "-2", "/"]), 4)
+check(lambda: eval_rpn(["1", "3", "/"]), 0)
+check(lambda: eval_rpn(["5", "dup", "*", "neg"]), -25)
+check(lambda: eval_rpn(["2", "9", "swap", "-"]), 7)
+check(lambda: eval_rpn(["42"]), 42)
+check(lambda: eval_rpn(["10", "3", "-"]), 7)
+check_raises(lambda: eval_rpn(["1", "0", "/"]), ZeroDivisionError)
+check_raises(lambda: eval_rpn(["1", "+"]), ValueError)
+check_raises(lambda: eval_rpn(["1", "2"]), ValueError)
+check_raises(lambda: eval_rpn([]), ValueError)
+check_raises(lambda: eval_rpn(["1", "2", "pow"]), ValueError)
+check_raises(lambda: eval_rpn(["dup"]), ValueError)
+check_raises(lambda: eval_rpn(["3", "swap"]), ValueError)
+check_raises(lambda: eval_rpn(["1.5"]), ValueError)
+'''
+
+[[task]]
+id = "cg06"
+entry = "assign_rooms"
+prompt = '''
+Write a Python function `assign_rooms(meetings: list[tuple[str, int, int]]) -> dict[str, int]`.
+
+Each meeting is (name, start, end) with start < end and covers the half-open interval [start, end). Rooms are numbered 1, 2, 3, ...
+
+Process meetings in order of start time; meetings with the same start time are processed in alphabetical order of name. Give each meeting the lowest-numbered room that is free at its start time (a room is free if every meeting already placed in it has end <= this start). Open a new room only when no existing room is free.
+
+Return a dict mapping each meeting name to its room number. Names are unique.
+
+Example:
+assign_rooms([("a", 0, 30), ("b", 5, 10), ("c", 15, 20), ("d", 10, 15)]) == {"a": 1, "b": 2, "d": 2, "c": 2}
+'''
+reference = '''
+def assign_rooms(meetings):
+    room_end = []
+    result = {}
+    for name, start, end in sorted(meetings, key=lambda m: (m[1], m[0])):
+        for i, e in enumerate(room_end):
+            if e <= start:
+                room_end[i] = end
+                result[name] = i + 1
+                break
+        else:
+            room_end.append(end)
+            result[name] = len(room_end)
+    return result
+'''
+tests = '''
+check(lambda: assign_rooms([("a", 0, 30), ("b", 5, 10), ("c", 15, 20), ("d", 10, 15)]), {"a": 1, "b": 2, "d": 2, "c": 2})
+check(lambda: assign_rooms([]), {})
+check(lambda: assign_rooms([("x", 1, 2)]), {"x": 1})
+check(lambda: assign_rooms([("b", 0, 10), ("a", 0, 10), ("c", 0, 10)]), {"a": 1, "b": 2, "c": 3})
+check(lambda: assign_rooms([("m1", 0, 10), ("m2", 0, 5), ("m3", 5, 8), ("m4", 9, 12), ("m5", 10, 11)]), {"m1": 1, "m2": 2, "m3": 2, "m4": 2, "m5": 1})
+check(lambda: assign_rooms([("p", 0, 5), ("q", 1, 6), ("r", 2, 7), ("s", 5, 9), ("t", 6, 8)]), {"p": 1, "q": 2, "r": 3, "s": 1, "t": 2})
+check(lambda: assign_rooms([("late", 100, 200), ("early", 0, 50), ("mid", 50, 100)]), {"early": 1, "mid": 1, "late": 1})
+check(lambda: assign_rooms([("a", 0, 10), ("b", 2, 4), ("c", 3, 5), ("d", 4, 6)]), {"a": 1, "b": 2, "c": 3, "d": 2})
+check(lambda: assign_rooms([("z", 0, 4), ("y", 4, 8), ("x", 0, 2), ("w", 2, 4)]), {"x": 1, "z": 2, "w": 1, "y": 1})
+'''
+
+[[task]]
+id = "cg07"
+entry = "split_balanced"
+prompt = '''
+Write a Python function `split_balanced(s: str) -> list[str]`.
+
+`s` contains only the characters ()[]{}. If `s` is correctly nested (every opener is closed by the matching closer, in the right order), split it into the largest possible number of non-empty contiguous pieces that are each correctly nested, and return the pieces in order. If `s` is not correctly nested, return []. The empty string returns [].
+
+Examples:
+split_balanced("()[]{()}") == ["()", "[]", "{()}"]
+split_balanced("([)]") == []
+'''
+reference = '''
+def split_balanced(s):
+    pairs = {")": "(", "]": "[", "}": "{"}
+    stack, pieces, start = [], [], 0
+    for i, ch in enumerate(s):
+        if ch in "([{":
+            stack.append(ch)
+        elif ch in pairs:
+            if not stack or stack[-1] != pairs[ch]:
+                return []
+            stack.pop()
+            if not stack:
+                pieces.append(s[start:i + 1])
+                start = i + 1
+        else:
+            return []
+    return pieces if not stack else []
+'''
+tests = '''
+check(lambda: split_balanced("()[]{()}"), ["()", "[]", "{()}"])
+check(lambda: split_balanced("([)]"), [])
+check(lambda: split_balanced(""), [])
+check(lambda: split_balanced("(())"), ["(())"])
+check(lambda: split_balanced("(()())[]"), ["(()())", "[]"])
+check(lambda: split_balanced("((("), [])
+check(lambda: split_balanced(")("), [])
+check(lambda: split_balanced("{[()()]}()"), ["{[()()]}", "()"])
+check(lambda: split_balanced("()()()"), ["()", "()", "()"])
+check(lambda: split_balanced("(]"), [])
+check(lambda: split_balanced("[{}](())"), ["[{}]", "(())"])
+check(lambda: split_balanced("()("), [])
+'''
+
+[[task]]
+id = "cg08"
+entry = "roman_to_int"
+prompt = '''
+Write a Python function `roman_to_int(s: str) -> int` for Roman numerals from 1 to 3999.
+
+Only canonical (standard modern) numerals are valid: symbols I=1, V=5, X=10, L=50, C=100, D=500, M=1000, written from largest to smallest, using the subtractive pairs IV, IX, XL, XC, CD and CM, and never repeating a symbol more than three times in a row (4 is "IV", not "IIII"; 99 is "XCIX", not "IC"). The input must be uppercase.
+
+Raise ValueError for anything that is not the canonical numeral of a number from 1 to 3999, including the empty string.
+
+Examples:
+roman_to_int("MCMXCIV") == 1994
+roman_to_int("IIII") raises ValueError
+'''
+reference = '''
+_TABLE = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"),
+          (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+
+def _to_roman(n):
+    out = []
+    for value, sym in _TABLE:
+        while n >= value:
+            out.append(sym)
+            n -= value
+    return "".join(out)
+
+def roman_to_int(s):
+    values = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+    if not isinstance(s, str) or not s:
+        raise ValueError("empty numeral")
+    total = 0
+    for i, ch in enumerate(s):
+        if ch not in values:
+            raise ValueError("bad symbol %r" % ch)
+        v = values[ch]
+        if i + 1 < len(s) and values.get(s[i + 1], 0) > v:
+            total -= v
+        else:
+            total += v
+    if not 1 <= total <= 3999 or _to_roman(total) != s:
+        raise ValueError("not a canonical numeral: %r" % s)
+    return total
+'''
+tests = '''
+check(lambda: roman_to_int("MCMXCIV"), 1994)
+check(lambda: roman_to_int("III"), 3)
+check(lambda: roman_to_int("XLII"), 42)
+check(lambda: roman_to_int("MMMCMXCIX"), 3999)
+check(lambda: roman_to_int("CDXLIV"), 444)
+check(lambda: roman_to_int("I"), 1)
+check(lambda: roman_to_int("DCCCXC"), 890)
+for bad in ["", "IIII", "IC", "VX", "MMMM", "IL", "XM", "VV", "LL", "DD", "IIV", "IXI", "iv", "XCX", "CMC", "MCMC", "ABC", "IVI"]:
+    check_raises((lambda b=bad: roman_to_int(b)), ValueError, label=repr(bad))
+'''
+
+[[task]]
+id = "cg09"
+entry = "count_paths"
+prompt = '''
+Write a Python function `count_paths(grid: list[str]) -> int`.
+
+`grid` is a non-empty list of equal-length, non-empty strings made of "." (open) and "#" (blocked). Count the paths from the top-left cell to the bottom-right cell that move only right or down and only through open cells. Return the count modulo 1_000_000_007. If the start or end cell is blocked, return 0. A 1x1 open grid has exactly one path.
+
+Example:
+count_paths(["...", ".#.", "..."]) == 2
+'''
+reference = '''
+def count_paths(grid):
+    mod = 1_000_000_007
+    rows, cols = len(grid), len(grid[0])
+    dp = [0] * cols
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] == "#":
+                dp[c] = 0
+            elif r == 0 and c == 0:
+                dp[c] = 1
+            else:
+                dp[c] = (dp[c] + (dp[c - 1] if c > 0 else 0)) % mod
+    return dp[-1]
+'''
+tests = '''
+import math
+check(lambda: count_paths(["...", ".#.", "..."]), 2)
+check(lambda: count_paths(["."]), 1)
+check(lambda: count_paths(["#"]), 0)
+check(lambda: count_paths(["..", ".."]), 2)
+check(lambda: count_paths(["..#", "...", "#.."]), 4)
+check(lambda: count_paths([".#", "#."]), 0)
+check(lambda: count_paths(["...."]), 1)
+check(lambda: count_paths(["..", "#."]), 1)
+check(lambda: count_paths(["...", "...", "..#"]), 0)
+check(lambda: count_paths(["." * 60] * 60), math.comb(118, 59) % 1_000_000_007)
+check(lambda: count_paths(["." * 300] * 300), math.comb(598, 299) % 1_000_000_007)
+'''
+
+[[task]]
+id = "cg10"
+entry = "format_table"
+lite = true
+prompt = '''
+Write a Python function `format_table(rows: list[list[str]], align: str) -> str`.
+
+`rows` has at least one row; every row has len(align) cells. Each character of `align` is "l" (left), "r" (right) or "c" (center) for that column.
+- A column's width is the length of its longest cell.
+- Pad cells with spaces to the column width. For "c", split the padding evenly; when it is odd, the extra space goes on the right.
+- Join the cells of a row with " | ".
+- After the first row (the header), add a separator line: for each column, that many "-" characters, joined with "-+-".
+- Remove trailing spaces from every line, and join the lines with "\n" (no newline at the end).
+
+Example:
+format_table([["name", "qty"], ["apple", "3"], ["fig", "12"]], "lr") ==
+"name  | qty\n------+----\napple |   3\nfig   |  12"
+'''
+reference = '''
+def format_table(rows, align):
+    widths = [max(len(r[i]) for r in rows) for i in range(len(align))]
+
+    def pad(cell, width, how):
+        extra = width - len(cell)
+        if how == "l":
+            return cell + " " * extra
+        if how == "r":
+            return " " * extra + cell
+        left = extra // 2
+        return " " * left + cell + " " * (extra - left)
+
+    lines = []
+    for idx, row in enumerate(rows):
+        lines.append(" | ".join(pad(c, w, a) for c, w, a in zip(row, widths, align)).rstrip())
+        if idx == 0:
+            lines.append("-+-".join("-" * w for w in widths))
+    return "\n".join(lines)
+'''
+tests = '''
+check(lambda: format_table([["name", "qty"], ["apple", "3"], ["fig", "12"]], "lr"), "name  | qty\n------+----\napple |   3\nfig   |  12")
+check(lambda: format_table([["a"]], "l"), "a\n-")
+check(lambda: format_table([["h1", "h2"]], "rl"), "h1 | h2\n---+---")
+check(lambda: format_table([["x", "y"], ["long", "z"]], "cl"), " x   | y\n-----+--\nlong | z")
+check(lambda: format_table([["id", "name"], ["1", "Al"], ["22", "Bea"]], "cc"), "id | name\n---+-----\n1  |  Al\n22 | Bea")
+check(lambda: format_table([["k", "v"], ["", ""]], "ll"), "k | v\n--+--\n  |")
+check(lambda: format_table([["ab"], ["abcde"]], "c"), " ab\n-----\nabcde")
+check(lambda: format_table([["n"], ["7"], ["123"]], "r"), "  n\n---\n  7\n123")
+'''
+
+[[task]]
+id = "cg11"
+entry = "lru_simulate"
+prompt = '''
+Write a Python function `lru_simulate(capacity: int, ops: list[tuple]) -> list[int]` that simulates a least-recently-used cache.
+
+Each op is either ("get", key) or ("put", key, value):
+- get: if key is present it becomes the most recently used and its value is appended to the output; otherwise -1 is appended.
+- put: insert or update key with value; key becomes the most recently used. If the cache then holds more than `capacity` keys, remove the least recently used key.
+- capacity can be 0, in which case nothing is ever stored.
+
+Return the list of outputs of all get operations, in order.
+'''
+reference = '''
+from collections import OrderedDict
+
+def lru_simulate(capacity, ops):
+    cache = OrderedDict()
+    out = []
+    for op in ops:
+        if op[0] == "get":
+            key = op[1]
+            if key in cache:
+                cache.move_to_end(key)
+                out.append(cache[key])
+            else:
+                out.append(-1)
+        else:
+            _, key, value = op
+            if capacity <= 0:
+                continue
+            cache[key] = value
+            cache.move_to_end(key)
+            if len(cache) > capacity:
+                cache.popitem(last=False)
+    return out
+'''
+tests = '''
+check(lambda: lru_simulate(2, [("put", 1, 1), ("put", 2, 2), ("get", 1), ("put", 3, 3), ("get", 2), ("put", 4, 4), ("get", 1), ("get", 3), ("get", 4)]), [1, -1, -1, 3, 4])
+check(lambda: lru_simulate(0, [("put", 1, 1), ("get", 1)]), [-1])
+check(lambda: lru_simulate(1, [("put", "a", 5), ("put", "a", 6), ("get", "a"), ("put", "b", 7), ("get", "a"), ("get", "b")]), [6, -1, 7])
+check(lambda: lru_simulate(2, [("put", 1, 1), ("put", 2, 2), ("put", 1, 10), ("put", 3, 3), ("get", 2), ("get", 1), ("get", 3)]), [-1, 10, 3])
+check(lambda: lru_simulate(3, []), [])
+check(lambda: lru_simulate(2, [("get", 9)]), [-1])
+check(lambda: lru_simulate(2, [("put", 1, 1), ("put", 2, 2), ("get", 1), ("get", 2), ("put", 3, 3), ("get", 1), ("get", 2), ("get", 3)]), [1, 2, -1, 2, 3])
+check(lambda: lru_simulate(2, [("put", 1, 0), ("get", 1), ("put", 2, -1), ("get", 2)]), [0, -1])
+'''
+
+[[task]]
+id = "cg12"
+entry = "best_knapsack"
+prompt = '''
+Write a Python function `best_knapsack(items: list[tuple[str, int, int]], capacity: int) -> list[str]`.
+
+Each item is (name, weight, value) with a unique name, weight >= 1 and value >= 0. Choose a subset with total weight <= capacity that maximizes the total value. If several subsets reach the maximum value, prefer the one with the smallest total weight; if still tied, prefer the one whose sorted list of names is smallest when the sorted name lists are compared as Python lists.
+
+Return the chosen names sorted alphabetically. There are at most 16 items.
+
+Example:
+best_knapsack([("a", 3, 4), ("b", 2, 3), ("c", 2, 3)], 4) == ["b", "c"]
+'''
+reference = '''
+def best_knapsack(items, capacity):
+    best_key, best = None, []
+    n = len(items)
+    for mask in range(1 << n):
+        weight = value = 0
+        names = []
+        for i in range(n):
+            if mask >> i & 1:
+                name, w, v = items[i]
+                weight += w
+                value += v
+                names.append(name)
+        if weight > capacity:
+            continue
+        names.sort()
+        key = (-value, weight, names)
+        if best_key is None or key < best_key:
+            best_key, best = key, names
+    return best
+'''
+tests = '''
+import random as _random
+
+def _ref(items, capacity):
+    best_key, best = None, []
+    n = len(items)
+    for mask in range(1 << n):
+        weight = value = 0
+        names = []
+        for i in range(n):
+            if mask >> i & 1:
+                weight += items[i][1]
+                value += items[i][2]
+                names.append(items[i][0])
+        if weight <= capacity:
+            names.sort()
+            key = (-value, weight, names)
+            if best_key is None or key < best_key:
+                best_key, best = key, names
+    return best
+
+check(lambda: best_knapsack([("a", 3, 4), ("b", 2, 3), ("c", 2, 3)], 4), ["b", "c"])
+check(lambda: best_knapsack([], 10), [])
+check(lambda: best_knapsack([("x", 5, 10)], 4), [])
+check(lambda: best_knapsack([("x", 5, 10)], 5), ["x"])
+check(lambda: best_knapsack([("a", 2, 5), ("b", 3, 5), ("c", 1, 0)], 3), ["a"])
+check(lambda: best_knapsack([("b", 2, 5), ("a", 2, 5)], 2), ["a"])
+check(lambda: best_knapsack([("z", 1, 1), ("y", 1, 1), ("w", 2, 2)], 2), ["w"])
+_rng = _random.Random(7)
+for _case in range(12):
+    _items = [("i%02d" % k, _rng.randint(1, 6), _rng.randint(0, 6)) for k in range(_rng.randint(4, 11))]
+    _cap = _rng.randint(3, 18)
+    check((lambda it=_items, c=_cap: best_knapsack(it, c)), _ref(_items, _cap), label="random %d" % _case)
+_big = [("n%02d" % k, (k * 7) % 9 + 1, (k * 5) % 8) for k in range(16)]
+check(lambda: best_knapsack(_big, 25), _ref(_big, 25), label="16 items")
+'''
+
+[[task]]
+id = "cg13"
+entry = "wrap_text"
+prompt = '''
+Write a Python function `wrap_text(text: str, width: int) -> list[str]` (width >= 1).
+
+Split `text` into words on any whitespace. A word longer than `width` is first cut into pieces of exactly `width` characters (the last piece may be shorter); each piece is then treated as a separate word.
+
+Fill lines greedily: keep adding words to the current line, separated by single spaces, while the line length stays <= width; otherwise start a new line. Return the list of lines. Text with no words returns [].
+
+Examples:
+wrap_text("the quick brown fox", 10) == ["the quick", "brown fox"]
+wrap_text("abcdefghij xy", 4) == ["abcd", "efgh", "ij", "xy"]
+'''
+reference = '''
+def wrap_text(text, width):
+    words = []
+    for w in text.split():
+        while len(w) > width:
+            words.append(w[:width])
+            w = w[width:]
+        if w:
+            words.append(w)
+    lines, cur = [], ""
+    for w in words:
+        if not cur:
+            cur = w
+        elif len(cur) + 1 + len(w) <= width:
+            cur += " " + w
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+'''
+tests = '''
+check(lambda: wrap_text("the quick brown fox", 10), ["the quick", "brown fox"])
+check(lambda: wrap_text("abcdefghij xy", 4), ["abcd", "efgh", "ij", "xy"])
+check(lambda: wrap_text("abcdefg hi", 5), ["abcde", "fg hi"])
+check(lambda: wrap_text("", 5), [])
+check(lambda: wrap_text("   \n\t ", 3), [])
+check(lambda: wrap_text("a b c d e", 3), ["a b", "c d", "e"])
+check(lambda: wrap_text("hello", 5), ["hello"])
+check(lambda: wrap_text("hello world", 1), ["h", "e", "l", "l", "o", "w", "o", "r", "l", "d"])
+check(lambda: wrap_text("one  two\tthree\nfour", 9), ["one two", "three", "four"])
+check(lambda: wrap_text("xx yyyyyyy z", 3), ["xx", "yyy", "yyy", "y z"])
+'''
+
+[[task]]
+id = "cg14"
+entry = "free_slots"
+prompt = '''
+Write a Python function `free_slots(busy_a: list[tuple[str, str]], busy_b: list[tuple[str, str]], min_minutes: int) -> list[tuple[str, str]]`.
+
+Times are "HH:MM" strings (24-hour clock). Each busy interval (start, end) is half-open [start, end). Intervals may overlap, be unsorted, have zero length, or extend outside the working day.
+
+Return the time ranges between "09:00" and "17:00" when both people are free, as a sorted list of (start, end) "HH:MM" tuples. Free time that touches is reported as one range. Keep only ranges that are at least `min_minutes` long (min_minutes >= 1).
+
+Example:
+free_slots([("09:30", "10:00")], [("12:00", "13:00")], 30) == [("09:00", "09:30"), ("10:00", "12:00"), ("13:00", "17:00")]
+'''
+reference = '''
+def free_slots(busy_a, busy_b, min_minutes):
+    def to_min(t):
+        h, m = t.split(":")
+        return int(h) * 60 + int(m)
+
+    def fmt(v):
+        return "%02d:%02d" % (v // 60, v % 60)
+
+    start, end = 9 * 60, 17 * 60
+    busy = sorted((to_min(s), to_min(e)) for s, e in list(busy_a) + list(busy_b))
+    result, cur = [], start
+    for s, e in busy:
+        if e <= s:
+            continue
+        if s > cur:
+            seg_end = min(s, end)
+            if seg_end > cur and seg_end - cur >= min_minutes:
+                result.append((fmt(cur), fmt(seg_end)))
+        cur = max(cur, e)
+        if cur >= end:
+            break
+    if cur < end and end - cur >= min_minutes:
+        result.append((fmt(cur), fmt(end)))
+    return result
+'''
+tests = '''
+check(lambda: free_slots([("09:30", "10:00")], [("12:00", "13:00")], 30), [("09:00", "09:30"), ("10:00", "12:00"), ("13:00", "17:00")])
+check(lambda: free_slots([], [], 60), [("09:00", "17:00")])
+check(lambda: free_slots([("08:00", "18:00")], [], 1), [])
+check(lambda: free_slots([("09:00", "09:20")], [("09:40", "10:00")], 30), [("10:00", "17:00")])
+check(lambda: free_slots([("09:00", "09:20")], [("09:40", "10:00")], 20), [("09:20", "09:40"), ("10:00", "17:00")])
+check(lambda: free_slots([("13:00", "14:00"), ("10:00", "11:00")], [("10:30", "13:30")], 15), [("09:00", "10:00"), ("14:00", "17:00")])
+check(lambda: free_slots([("16:30", "19:00")], [("07:00", "09:15")], 60), [("09:15", "16:30")])
+check(lambda: free_slots([("12:00", "12:00")], [], 480), [("09:00", "17:00")])
+check(lambda: free_slots([("10:00", "11:00")], [("11:00", "12:00")], 1), [("09:00", "10:00"), ("12:00", "17:00")])
+'''
+
+[[task]]
+id = "cg15"
+entry = "calc"
+lite = true
+prompt = '''
+Write a Python function `calc(expr: str) -> fractions.Fraction` that evaluates an arithmetic expression exactly.
+
+Grammar: non-negative integer literals, binary + - * / ^, unary minus, and parentheses. Spaces may appear between tokens.
+- ^ is exponentiation. It is right-associative (2^3^2 = 2^9 = 512) and binds tighter than unary minus (-2^2 = -4), but its right operand may itself start with a unary minus (2^-1 = 1/2).
+- Unary minus binds tighter than * and /, so -3*2 = -6 and 2*-3 = -6.
+- / is exact division.
+- The exponent must evaluate to an integer; otherwise raise ValueError.
+
+Raise ZeroDivisionError when dividing by zero (including 0 raised to a negative power), and ValueError for any syntax error (empty input, unbalanced parentheses, bad characters, missing operands, two numbers in a row). Always return a fractions.Fraction (an integer result is Fraction(n, 1)).
+
+Examples:
+calc("1 + 2 * 3") == Fraction(7)
+calc("(1 + 2) / 4") == Fraction(3, 4)
+calc("-2^2") == Fraction(-4)
+calc("2^3^2") == Fraction(512)
+'''
+reference = '''
+from fractions import Fraction
+
+def calc(expr):
+    tokens, i = [], 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch.isspace():
+            i += 1
+        elif ch in "0123456789":
+            j = i
+            while j < len(expr) and expr[j] in "0123456789":
+                j += 1
+            tokens.append(("num", int(expr[i:j])))
+            i = j
+        elif ch in "+-*/^()":
+            tokens.append(("op", ch))
+            i += 1
+        else:
+            raise ValueError("bad character %r" % ch)
+    pos = 0
+
+    def peek():
+        return tokens[pos] if pos < len(tokens) else None
+
+    def take(op=None):
+        nonlocal pos
+        tok = peek()
+        if tok is None or (op is not None and tok != ("op", op)):
+            raise ValueError("syntax error")
+        pos += 1
+        return tok
+
+    def expression():
+        value = term()
+        while peek() in (("op", "+"), ("op", "-")):
+            op = take()[1]
+            rhs = term()
+            value = value + rhs if op == "+" else value - rhs
+        return value
+
+    def term():
+        value = unary()
+        while peek() in (("op", "*"), ("op", "/")):
+            op = take()[1]
+            rhs = unary()
+            if op == "*":
+                value = value * rhs
+            else:
+                if rhs == 0:
+                    raise ZeroDivisionError("division by zero")
+                value = value / rhs
+        return value
+
+    def unary():
+        if peek() == ("op", "-"):
+            take()
+            return -unary()
+        return power()
+
+    def power():
+        base = atom()
+        if peek() == ("op", "^"):
+            take()
+            exp = unary()
+            if exp.denominator != 1:
+                raise ValueError("non-integer exponent")
+            if base == 0 and exp < 0:
+                raise ZeroDivisionError("zero to a negative power")
+            return base ** int(exp)
+        return base
+
+    def atom():
+        tok = peek()
+        if tok is None:
+            raise ValueError("unexpected end of input")
+        if tok[0] == "num":
+            take()
+            return Fraction(tok[1])
+        if tok == ("op", "("):
+            take()
+            value = expression()
+            take(")")
+            return value
+        raise ValueError("syntax error")
+
+    result = expression()
+    if pos != len(tokens):
+        raise ValueError("unexpected trailing input")
+    return Fraction(result)
+'''
+tests = '''
+from fractions import Fraction as F
+check(lambda: calc("1 + 2 * 3"), F(7))
+check(lambda: calc("(1 + 2) / 4"), F(3, 4))
+check(lambda: calc("-2^2"), F(-4))
+check(lambda: calc("(-2)^2"), F(4))
+check(lambda: calc("2^3^2"), F(512))
+check(lambda: calc("2^-1"), F(1, 2))
+check(lambda: calc("2*-3"), F(-6))
+check(lambda: calc("--3"), F(3))
+check(lambda: calc("1/3 + 1/6"), F(1, 2))
+check(lambda: calc(" 7 - 2 - 1 "), F(4))
+check(lambda: calc("8 / 2 / 2"), F(2))
+check(lambda: calc("(2/3)^2"), F(4, 9))
+check(lambda: calc("2^(1+1)^2"), F(16))
+check(lambda: calc("((((5))))"), F(5))
+check(lambda: calc("10 - -2"), F(12))
+check(lambda: type(calc("2+2")) is F, True)
+check_raises(lambda: calc("4^(1/2)"), ValueError)
+check_raises(lambda: calc("1/0"), ZeroDivisionError)
+check_raises(lambda: calc("0^-1"), ZeroDivisionError)
+check_raises(lambda: calc(""), ValueError)
+check_raises(lambda: calc("(1+2"), ValueError)
+check_raises(lambda: calc("1+"), ValueError)
+check_raises(lambda: calc("2 3"), ValueError)
+check_raises(lambda: calc("1 + a"), ValueError)
+check_raises(lambda: calc(")("), ValueError)
+'''
+
+[[task]]
+id = "cg16"
+entry = "apply_ledger"
+prompt = '''
+Write a Python function `apply_ledger(lines: list[str]) -> dict[str, str]`.
+
+Each line is one of:
+- "deposit NAME AMOUNT"
+- "withdraw NAME AMOUNT"
+- "transfer FROM TO AMOUNT"
+
+NAME is a lowercase word. AMOUNT is a non-negative decimal number with at most two digits after the point (for example "12", "0.5" or "3.25").
+
+All accounts start at 0. Apply the lines in order. A withdraw or transfer that would make the paying account's balance negative is skipped entirely. Arithmetic must be exact (no floating-point rounding errors).
+
+Return a dict with every account name that appears in any line (even if all of its operations were skipped), mapped to its final balance formatted with exactly two decimals, for example "12.50". The dict's keys must be in alphabetical order.
+
+Example:
+apply_ledger(["deposit alice 10", "transfer alice bob 2.5", "withdraw bob 3"]) == {"alice": "7.50", "bob": "2.50"}
+'''
+reference = '''
+from decimal import Decimal
+
+def apply_ledger(lines):
+    bal = {}
+    for line in lines:
+        parts = line.split()
+        if parts[0] == "deposit":
+            _, name, amt = parts
+            bal.setdefault(name, Decimal(0))
+            bal[name] += Decimal(amt)
+        elif parts[0] == "withdraw":
+            _, name, amt = parts
+            bal.setdefault(name, Decimal(0))
+            a = Decimal(amt)
+            if bal[name] - a >= 0:
+                bal[name] -= a
+        elif parts[0] == "transfer":
+            _, src, dst, amt = parts
+            bal.setdefault(src, Decimal(0))
+            bal.setdefault(dst, Decimal(0))
+            a = Decimal(amt)
+            if bal[src] - a >= 0:
+                bal[src] -= a
+                bal[dst] += a
+        else:
+            raise ValueError("unknown operation %r" % parts[0])
+    return {name: "%.2f" % bal[name] for name in sorted(bal)}
+'''
+tests = '''
+check(lambda: apply_ledger(["deposit alice 10", "transfer alice bob 2.5", "withdraw bob 3"]), {"alice": "7.50", "bob": "2.50"})
+check(lambda: apply_ledger([]), {})
+check(lambda: apply_ledger(["withdraw carl 1"]), {"carl": "0.00"})
+check(lambda: apply_ledger(["deposit a 0.3", "withdraw a 0.1", "withdraw a 0.2"]), {"a": "0.00"})
+check(lambda: apply_ledger(["deposit x 0.3", "withdraw x 0.1", "withdraw x 0.1", "withdraw x 0.1"]), {"x": "0.00"})
+check(lambda: list(apply_ledger(["deposit zed 1", "deposit amy 2", "deposit max 3"]).keys()), ["amy", "max", "zed"])
+check(lambda: apply_ledger(["deposit a 5", "transfer a b 5.01", "transfer a b 5"]), {"a": "0.00", "b": "5.00"})
+check(lambda: apply_ledger(["deposit p 12", "transfer p q 0.5", "transfer q r 0.25", "withdraw r 0.30"]), {"p": "11.50", "q": "0.25", "r": "0.25"})
+check(lambda: apply_ledger(["transfer a b 0"]), {"a": "0.00", "b": "0.00"})
+check(lambda: apply_ledger(["deposit m 1000000.01", "withdraw m 0.01"]), {"m": "1000000.00"})
+'''
+
+[[task]]
+id = "cg17"
+entry = "min_window"
+prompt = '''
+Write a Python function `min_window(s: str, t: str) -> str`.
+
+Return the shortest contiguous substring of `s` that contains every character of `t`, counting multiplicity (if `t` has two "a"s, the window needs at least two "a"s). If several shortest windows exist, return the leftmost one. If no window exists, or `t` is empty, return "". Both strings can be up to 100000 characters long, so the solution must run in about linear time.
+
+Example:
+min_window("ADOBECODEBANC", "ABC") == "BANC"
+'''
+reference = '''
+from collections import Counter
+
+def min_window(s, t):
+    if not t:
+        return ""
+    need = Counter(t)
+    missing = len(t)
+    left = 0
+    best = None
+    for right, ch in enumerate(s, 1):
+        if need[ch] > 0:
+            missing -= 1
+        need[ch] -= 1
+        if missing == 0:
+            while need[s[left]] < 0:
+                need[s[left]] += 1
+                left += 1
+            if best is None or right - left < best[1] - best[0]:
+                best = (left, right)
+            need[s[left]] += 1
+            missing += 1
+            left += 1
+    return s[best[0]:best[1]] if best else ""
+'''
+tests = '''
+import random as _random
+from collections import Counter as _Counter
+
+def _ref(s, t):
+    if not t:
+        return ""
+    need = _Counter(t)
+    for length in range(len(t), len(s) + 1):
+        for i in range(len(s) - length + 1):
+            window = _Counter(s[i:i + length])
+            if all(window[c] >= n for c, n in need.items()):
+                return s[i:i + length]
+    return ""
+
+check(lambda: min_window("ADOBECODEBANC", "ABC"), "BANC")
+check(lambda: min_window("a", "a"), "a")
+check(lambda: min_window("a", "aa"), "")
+check(lambda: min_window("aa", "aa"), "aa")
+check(lambda: min_window("abc", ""), "")
+check(lambda: min_window("", "a"), "")
+check(lambda: min_window("abab", "ab"), "ab")
+check(lambda: min_window("bba", "ab"), "ba")
+check(lambda: min_window("cabwefgewcwaefgcf", "cae"), "cwae")
+_rng = _random.Random(11)
+for _case in range(30):
+    _s = "".join(_rng.choice("abc") for _ in range(_rng.randint(0, 12)))
+    _t = "".join(_rng.choice("abc") for _ in range(_rng.randint(1, 4)))
+    check((lambda s=_s, t=_t: min_window(s, t)), _ref(_s, _t), label="random %r %r" % (_s, _t))
+_long = "x" * 60000 + "a" + "y" * 30000 + "b" + "x" * 9998
+check(lambda: min_window(_long, "ab"), "a" + "y" * 30000 + "b", label="long")
+'''
+
+[[task]]
+id = "cg18"
+entry = "parse_csv_line"
+prompt = '''
+Write a Python function `parse_csv_line(line: str) -> list[str]`.
+
+Fields are separated by commas. A field may be enclosed in double quotes; inside a quoted field, commas and newlines are literal and a doubled quote "" stands for one ". Quotes only have this meaning when the field starts with a quote: a quote anywhere inside an unquoted field is kept as a literal character. Whitespace is never trimmed.
+
+Raise ValueError if a quoted field is not closed, or if a closing quote is followed by anything other than a comma or the end of the line.
+
+An empty line is a single empty field: parse_csv_line("") == [""].
+
+Examples:
+parse_csv_line('a,"b,c",d') == ["a", "b,c", "d"]
+parse_csv_line('"say ""hi""",x') == ['say "hi"', "x"]
+parse_csv_line('ab"c,d') == ['ab"c', "d"]
+'''
+reference = '''
+def parse_csv_line(line):
+    fields = []
+    i, n = 0, len(line)
+    while True:
+        if i < n and line[i] == '"':
+            i += 1
+            buf = []
+            while True:
+                if i >= n:
+                    raise ValueError("unclosed quote")
+                ch = line[i]
+                if ch == '"':
+                    if i + 1 < n and line[i + 1] == '"':
+                        buf.append('"')
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                buf.append(ch)
+                i += 1
+            fields.append("".join(buf))
+            if i == n:
+                return fields
+            if line[i] != ",":
+                raise ValueError("unexpected character after a closing quote")
+            i += 1
+        else:
+            j = line.find(",", i)
+            if j == -1:
+                fields.append(line[i:])
+                return fields
+            fields.append(line[i:j])
+            i = j + 1
+'''
+tests = '''
+check(lambda: parse_csv_line('a,"b,c",d'), ["a", "b,c", "d"])
+check(lambda: parse_csv_line('"say ""hi""",x'), ['say "hi"', "x"])
+check(lambda: parse_csv_line('ab"c,d'), ['ab"c', "d"])
+check(lambda: parse_csv_line(""), [""])
+check(lambda: parse_csv_line(","), ["", ""])
+check(lambda: parse_csv_line("a,,b"), ["a", "", "b"])
+check(lambda: parse_csv_line(" a , b "), [" a ", " b "])
+check(lambda: parse_csv_line('""'), [""])
+check(lambda: parse_csv_line('"",""'), ["", ""])
+check(lambda: parse_csv_line('x,"y"'), ["x", "y"])
+check(lambda: parse_csv_line('"a""b"'), ['a"b'])
+check(lambda: parse_csv_line('"multi\nline",z'), ["multi\nline", "z"])
+check(lambda: parse_csv_line(' "x",y'), [' "x"', "y"])
+check(lambda: parse_csv_line("a,"), ["a", ""])
+check_raises(lambda: parse_csv_line('"abc'), ValueError)
+check_raises(lambda: parse_csv_line('"abc"d,e'), ValueError)
+check_raises(lambda: parse_csv_line('a,"b'), ValueError)
+check_raises(lambda: parse_csv_line('"a" ,b'), ValueError)
+'''
+
+[[task]]
+id = "cg19"
+entry = "natural_sort"
+prompt = '''
+Write a Python function `natural_sort(names: list[str]) -> list[str]` that returns a new list in "natural" order.
+
+Split each string into runs of ASCII digits (0-9) and runs of other characters. Compare two strings run by run:
+- two digit runs compare by numeric value;
+- two non-digit runs compare case-insensitively (using str.lower());
+- a digit run sorts before a non-digit run;
+- if one string's runs are a prefix of the other's, the shorter one comes first.
+If two strings are still equal under these rules (for example "a01" and "a1", or "A" and "a"), order them by plain string comparison (`<`).
+
+Example:
+natural_sort(["file10.txt", "file2.txt", "File1.txt"]) == ["File1.txt", "file2.txt", "file10.txt"]
+'''
+reference = '''
+import re
+
+def natural_sort(names):
+    def key(s):
+        runs = []
+        for part in re.findall(r"[0-9]+|[^0-9]+", s):
+            if part[0] in "0123456789":
+                runs.append((0, int(part), ""))
+            else:
+                runs.append((1, 0, part.lower()))
+        return (runs, s)
+    return sorted(names, key=key)
+'''
+tests = '''
+check(lambda: natural_sort(["file10.txt", "file2.txt", "File1.txt"]), ["File1.txt", "file2.txt", "file10.txt"])
+check(lambda: natural_sort([]), [])
+check(lambda: natural_sort(["a1", "a01", "a"]), ["a", "a01", "a1"])
+check(lambda: natural_sort(["b", "A", "a", "B"]), ["A", "a", "B", "b"])
+check(lambda: natural_sort(["x2y10", "x2y9", "x10y1"]), ["x2y9", "x2y10", "x10y1"])
+check(lambda: natural_sort(["10", "9", "1a", "1"]), ["1", "1a", "9", "10"])
+check(lambda: natural_sort(["a-2", "a-10", "a-1"]), ["a-1", "a-2", "a-10"])
+check(lambda: natural_sort(["img12.png", "img10.png", "IMG2.png", "img2.png"]), ["IMG2.png", "img2.png", "img10.png", "img12.png"])
+check(lambda: natural_sort(["1x", "x1"]), ["1x", "x1"])
+check(lambda: natural_sort(["v1.10", "v1.9", "v1.9.1"]), ["v1.9", "v1.9.1", "v1.10"])
+check(lambda: (lambda l: natural_sort(l) is not l)(["b", "a"]), True)
+'''
+
+[[task]]
+id = "cg20"
+entry = "normalize_path"
+lite = true
+prompt = '''
+Write a Python function `normalize_path(path: str) -> str` for POSIX-style paths (separator "/").
+
+- Collapse repeated slashes into one, including a leading "//" (which becomes "/").
+- Remove "." segments.
+- A ".." segment removes the previous real segment. In an absolute path, ".." at the root is dropped ("/.." is "/"). In a relative path, a ".." that cannot be resolved is kept ("../a/../.." is "../..").
+- Remove any trailing slash, except for the root "/" itself.
+- If a relative path becomes empty, return ".".
+
+Examples:
+normalize_path("/a//b/./c/..") == "/a/b"
+normalize_path("a/../../b") == "../b"
+normalize_path("//x") == "/x"
+'''
+reference = '''
+def normalize_path(path):
+    absolute = path.startswith("/")
+    out = []
+    for seg in path.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if out and out[-1] != "..":
+                out.pop()
+            elif not absolute:
+                out.append("..")
+            continue
+        out.append(seg)
+    if absolute:
+        return "/" + "/".join(out)
+    return "/".join(out) or "."
+'''
+tests = '''
+check(lambda: normalize_path("/a//b/./c/.."), "/a/b")
+check(lambda: normalize_path("a/../../b"), "../b")
+check(lambda: normalize_path("//x"), "/x")
+check(lambda: normalize_path("/"), "/")
+check(lambda: normalize_path(""), ".")
+check(lambda: normalize_path("."), ".")
+check(lambda: normalize_path("/../.."), "/")
+check(lambda: normalize_path("../a/../.."), "../..")
+check(lambda: normalize_path("a/b/"), "a/b")
+check(lambda: normalize_path("///a///b///"), "/a/b")
+check(lambda: normalize_path("a/./b/../../c/."), "c")
+check(lambda: normalize_path("a/.."), ".")
+check(lambda: normalize_path("./../x"), "../x")
+check(lambda: normalize_path("/a/b/../../../c"), "/c")
+check(lambda: normalize_path("..."), "...")
+check(lambda: normalize_path("a/.../b"), "a/.../b")
+'''

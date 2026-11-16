@@ -1,0 +1,299 @@
+# Bug fixes, tuning split. The model sees `code` (and `symptom`, when given) and must return a fixed
+# function. Validation checks that the buggy code fails and the reference passes the hidden checks.
+
+[[task]]
+id = "bf01"
+entry = "find_first"
+symptom = "find_first([1, 2, 2, 2, 3], 2) returns 2, but it should return 1."
+code = '''
+def find_first(items, target):
+    """Return the index of the first occurrence of target in the sorted list items, or -1 if it is absent."""
+    lo, hi = 0, len(items) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if items[mid] < target:
+            lo = mid + 1
+        elif items[mid] > target:
+            hi = mid - 1
+        else:
+            return mid
+    return -1
+'''
+reference = '''
+def find_first(items, target):
+    """Return the index of the first occurrence of target in the sorted list items, or -1 if it is absent."""
+    lo, hi = 0, len(items)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if items[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo if lo < len(items) and items[lo] == target else -1
+'''
+tests = '''
+import random as _random
+check(lambda: find_first([1, 2, 2, 2, 3], 2), 1)
+check(lambda: find_first([], 5), -1)
+check(lambda: find_first([5, 5, 5], 5), 0)
+check(lambda: find_first([1, 3, 5], 4), -1)
+check(lambda: find_first([1, 3, 5], 6), -1)
+check(lambda: find_first([1, 3, 5], 0), -1)
+check(lambda: find_first([1, 1, 2, 2, 2, 2, 3, 3, 9], 3), 6)
+check(lambda: find_first([0] * 1000 + [1] * 1000, 1), 1000)
+_rng = _random.Random(3)
+for _case in range(25):
+    _items = sorted(_rng.randint(0, 6) for _ in range(_rng.randint(0, 15)))
+    _t = _rng.randint(0, 7)
+    check((lambda it=_items, t=_t: find_first(it, t)), _items.index(_t) if _t in _items else -1, label="random %d" % _case)
+'''
+
+[[task]]
+id = "bf02"
+entry = "moving_average"
+lite = true
+symptom = "moving_average([1, 2, 3], 3) returns [] instead of [2.0]."
+code = '''
+def moving_average(values, window):
+    """Return the averages of every full window of `window` consecutive values (window >= 1).
+    For n values there are n - window + 1 averages; if window > n, return []."""
+    result = []
+    for i in range(len(values) - window):
+        chunk = values[i:i + window]
+        result.append(sum(chunk) / window)
+    return result
+'''
+reference = '''
+def moving_average(values, window):
+    """Return the averages of every full window of `window` consecutive values (window >= 1).
+    For n values there are n - window + 1 averages; if window > n, return []."""
+    result = []
+    for i in range(len(values) - window + 1):
+        result.append(sum(values[i:i + window]) / window)
+    return result
+'''
+tests = '''
+check(lambda: moving_average([1, 2, 3], 3), [2.0])
+check(lambda: moving_average([1, 2, 3, 4], 2), [1.5, 2.5, 3.5])
+check(lambda: moving_average([5], 1), [5.0])
+check(lambda: moving_average([1, 2], 3), [])
+check(lambda: moving_average([], 1), [])
+check(lambda: moving_average([2, 4, 6, 8], 1), [2.0, 4.0, 6.0, 8.0])
+check(lambda: moving_average([0.1, 0.2, 0.3, 0.4], 3), [0.2, 0.3])
+'''
+
+[[task]]
+id = "bf03"
+entry = "dedupe"
+code = '''
+def dedupe(items):
+    """Return a new list without duplicates, keeping the first occurrence of each item in its original
+    order. Items may be unhashable (for example lists or dicts). Two items are duplicates if they are
+    equal (==)."""
+    return list(set(items))
+'''
+reference = '''
+def dedupe(items):
+    """Return a new list without duplicates, keeping the first occurrence of each item in its original
+    order. Items may be unhashable (for example lists or dicts). Two items are duplicates if they are
+    equal (==)."""
+    out = []
+    seen = set()
+    for item in items:
+        try:
+            if item in seen:
+                continue
+            seen.add(item)
+        except TypeError:
+            if any(item == other for other in out):
+                continue
+        out.append(item)
+    return out
+'''
+tests = '''
+check(lambda: dedupe([3, 1, 3, 2, 1]), [3, 1, 2])
+check(lambda: dedupe([]), [])
+check(lambda: dedupe([[1], [2], [1]]), [[1], [2]])
+check(lambda: dedupe([{"a": 1}, {"a": 1}, {"b": 2}]), [{"a": 1}, {"b": 2}])
+check(lambda: dedupe([1, True, 1.0, "1"]), [1, "1"])
+check(lambda: dedupe(["b", "a", "b", "c", "a"]), ["b", "a", "c"])
+check(lambda: dedupe([[1, 2], (1, 2), [1, 2]]), [[1, 2], (1, 2)])
+check(lambda: dedupe([None, None, 0, False]), [None, 0])
+check(lambda: (lambda l: dedupe(l) is not l)([1, 2]), True)
+'''
+
+[[task]]
+id = "bf04"
+entry = "parse_query"
+code = '''
+def parse_query(qs):
+    """Parse a URL query string such as "a=1&b=two%20words&c" into a dict.
+    - Pairs are separated by "&"; empty pairs are ignored.
+    - Each pair is split at the FIRST "=" only; a pair without "=" gets the value "".
+    - Keys and values are percent-decoded, and "+" means a space.
+    - If a key repeats, the last value wins."""
+    result = {}
+    for pair in qs.split("&"):
+        key, value = pair.split("=")
+        result[key] = value
+    return result
+'''
+reference = '''
+from urllib.parse import unquote_plus
+
+def parse_query(qs):
+    """Parse a URL query string such as "a=1&b=two%20words&c" into a dict."""
+    result = {}
+    for pair in qs.split("&"):
+        if not pair:
+            continue
+        key, _, value = pair.partition("=")
+        result[unquote_plus(key)] = unquote_plus(value)
+    return result
+'''
+tests = '''
+check(lambda: parse_query("a=1&b=two%20words&c"), {"a": "1", "b": "two words", "c": ""})
+check(lambda: parse_query(""), {})
+check(lambda: parse_query("x=1=2"), {"x": "1=2"})
+check(lambda: parse_query("q=a+b%2Bc"), {"q": "a b+c"})
+check(lambda: parse_query("&&k=v&"), {"k": "v"})
+check(lambda: parse_query("k=1&k=2"), {"k": "2"})
+check(lambda: parse_query("na%6De=%E2%9C%93"), {"name": "✓"})
+check(lambda: parse_query("empty="), {"empty": ""})
+check(lambda: parse_query("a%26b=c%3Dd"), {"a&b": "c=d"})
+'''
+
+[[task]]
+id = "bf05"
+entry = "chunked"
+symptom = "chunked([1, 2, 3, 4, 5], 2) returns [[1, 2], [3, 4]] instead of [[1, 2], [3, 4], [5]]."
+code = '''
+def chunked(items, size):
+    """Split the list items into consecutive chunks of length size; the last chunk may be shorter.
+    size must be >= 1, otherwise raise ValueError."""
+    chunks = []
+    for i in range(0, len(items) - size + 1, size):
+        chunks.append(items[i:i + size])
+    return chunks
+'''
+reference = '''
+def chunked(items, size):
+    """Split the list items into consecutive chunks of length size; the last chunk may be shorter.
+    size must be >= 1, otherwise raise ValueError."""
+    if size < 1:
+        raise ValueError("size must be >= 1")
+    return [items[i:i + size] for i in range(0, len(items), size)]
+'''
+tests = '''
+check(lambda: chunked([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]])
+check(lambda: chunked([], 3), [])
+check(lambda: chunked([1, 2, 3], 3), [[1, 2, 3]])
+check(lambda: chunked([1, 2], 5), [[1, 2]])
+check(lambda: chunked([1, 2, 3, 4], 1), [[1], [2], [3], [4]])
+check_raises(lambda: chunked([1, 2], 0), ValueError)
+check_raises(lambda: chunked([1, 2], -1), ValueError)
+'''
+
+[[task]]
+id = "bf06"
+entry = "days_in_month"
+code = '''
+def days_in_month(year, month):
+    """Return the number of days in the given month (1-12) of the given year in the Gregorian calendar.
+    Raise ValueError for a month outside 1-12."""
+    if month == 2:
+        return 29 if year % 4 == 0 else 28
+    if month in (4, 6, 9, 11):
+        return 30
+    return 31
+'''
+reference = '''
+def days_in_month(year, month):
+    """Return the number of days in the given month (1-12) of the given year in the Gregorian calendar.
+    Raise ValueError for a month outside 1-12."""
+    if not 1 <= month <= 12:
+        raise ValueError("month must be 1-12")
+    if month == 2:
+        leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        return 29 if leap else 28
+    return 30 if month in (4, 6, 9, 11) else 31
+'''
+tests = '''
+check(lambda: days_in_month(2024, 2), 29)
+check(lambda: days_in_month(2023, 2), 28)
+check(lambda: days_in_month(1900, 2), 28)
+check(lambda: days_in_month(2000, 2), 29)
+check(lambda: days_in_month(2100, 2), 28)
+check(lambda: days_in_month(2023, 4), 30)
+check(lambda: days_in_month(2023, 12), 31)
+check(lambda: days_in_month(2023, 1), 31)
+check_raises(lambda: days_in_month(2023, 13), ValueError)
+check_raises(lambda: days_in_month(2023, 0), ValueError)
+'''
+
+[[task]]
+id = "bf07"
+entry = "flatten"
+code = '''
+def flatten(nested):
+    """Flatten arbitrarily nested lists and tuples into one flat list, keeping the order.
+    Anything that is not a list or tuple (strings, bytes, dicts, sets, ...) is a single item."""
+    out = []
+    for item in nested:
+        if hasattr(item, "__iter__"):
+            out.extend(flatten(item))
+        else:
+            out.append(item)
+    return out
+'''
+reference = '''
+def flatten(nested):
+    """Flatten arbitrarily nested lists and tuples into one flat list, keeping the order.
+    Anything that is not a list or tuple (strings, bytes, dicts, sets, ...) is a single item."""
+    out = []
+    for item in nested:
+        if isinstance(item, (list, tuple)):
+            out.extend(flatten(item))
+        else:
+            out.append(item)
+    return out
+'''
+tests = '''
+check(lambda: flatten([1, [2, [3, (4, 5)]], "ab"]), [1, 2, 3, 4, 5, "ab"])
+check(lambda: flatten([]), [])
+check(lambda: flatten([[[]]]), [])
+check(lambda: flatten(["abc", b"de", {"k": 1}]), ["abc", b"de", {"k": 1}])
+check(lambda: flatten([{1, 2}, [frozenset()]]), [{1, 2}, frozenset()])
+check(lambda: flatten(([1], (2, [3]))), [1, 2, 3])
+check(lambda: flatten([range(2)]), [range(2)])
+'''
+
+[[task]]
+id = "bf08"
+entry = "apply_discount"
+lite = true
+symptom = "apply_discount(25, 50) returns 12, but 12.5 cents should round up to 13."
+code = '''
+def apply_discount(price_cents, percent):
+    """Return the price in cents after taking `percent` percent off (percent is an int from 0 to 100,
+    price_cents is a non-negative int). Round to the nearest cent; exact halves round up."""
+    return int(price_cents * (100 - percent) / 100)
+'''
+reference = '''
+def apply_discount(price_cents, percent):
+    """Return the price in cents after taking `percent` percent off (percent is an int from 0 to 100,
+    price_cents is a non-negative int). Round to the nearest cent; exact halves round up."""
+    return (price_cents * (100 - percent) * 2 + 100) // 200
+'''
+tests = '''
+check(lambda: apply_discount(25, 50), 13)
+check(lambda: apply_discount(100, 0), 100)
+check(lambda: apply_discount(100, 100), 0)
+check(lambda: apply_discount(999, 10), 899)
+check(lambda: apply_discount(5, 10), 5)
+check(lambda: apply_discount(15, 10), 14)
+check(lambda: apply_discount(1, 50), 1)
+check(lambda: apply_discount(0, 30), 0)
+check(lambda: apply_discount(199, 33), 133)
+check(lambda: apply_discount(10**18 + 1, 50), 5 * 10**17 + 1)
+'''

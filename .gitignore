@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Machine-specific paths
+config/local.toml
+
+# Raw run data (model outputs, server logs, tuner state). Summaries live in results/.
+runs/
+
+# Generated launchers contain local paths
+launchers/

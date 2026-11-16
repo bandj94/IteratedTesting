@@ -1,0 +1,5 @@
+weight = 2
+max_turns = 14
+prompt = '''
+Implement the `low_stock(threshold)` method described in the TODO comment in inventory.py, and fix any bugs that the tests in tests/ reveal. Make every test pass without changing the tests.
+'''

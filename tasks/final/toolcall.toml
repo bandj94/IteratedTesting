@@ -1,0 +1,148 @@
+# Tool calling, held-out ("final") split.
+
+[[task]]
+id = "ftc01"
+lite = true
+tools = ["read_file", "search_code", "run_command", "list_dir"]
+[[task.messages]]
+role = "user"
+content = "Show me lines 40 to 60 of src/server/routes.py."
+[task.expect]
+type = "call"
+name = "read_file"
+args = { path = { path = "src/server/routes.py" }, start_line = { number = 40 }, end_line = { number = 60 } }
+[task.example]
+name = "read_file"
+args = { path = "src/server/routes.py", start_line = 40, end_line = 60 }
+
+[[task]]
+id = "ftc02"
+tools = ["read_file", "search_code", "run_command", "list_dir"]
+[[task.messages]]
+role = "user"
+content = "Search the tests directory for any use of time.sleep."
+[task.expect]
+type = "call"
+name = "search_code"
+args = { pattern = { regex = 'time\\?\.sleep' }, path = { path = "tests" } }
+[task.example]
+name = "search_code"
+args = { pattern = "time.sleep", path = "tests" }
+
+[[task]]
+id = "ftc03"
+tools = ["create_ticket", "web_fetch", "read_file"]
+[[task.messages]]
+role = "user"
+content = "Open a low-priority ticket called 'Update screenshots in README', due on the last day of this month."
+[task.expect]
+type = "call"
+name = "create_ticket"
+args = { title = { iequals = "Update screenshots in README" }, priority = { equals = "low" }, due_date = { equals = "2026-11-30" } }
+[task.example]
+name = "create_ticket"
+args = { title = "Update screenshots in README", priority = "low", due_date = "2026-11-30" }
+
+[[task]]
+id = "ftc04"
+lite = true
+tools = ["read_file", "search_code", "run_command", "web_fetch"]
+[[task.messages]]
+role = "user"
+content = "Quick question, no need to look anything up: is a Python list mutable? Answer yes or no."
+[task.expect]
+type = "answer"
+contains_all = ["yes"]
+[task.example]
+answer = "Yes."
+
+[[task]]
+id = "ftc05"
+tools = ["read_file", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "What port does the dev server use?"
+[[task.messages]]
+role = "assistant"
+content = ""
+tool_calls = [{ id = "call_1", name = "read_file", arguments = '{"path": "config/dev.toml"}' }]
+[[task.messages]]
+role = "tool"
+tool_call_id = "call_1"
+content = '''
+[server]
+host = "127.0.0.1"
+port = 8737
+reload = true
+
+[database]
+url = "sqlite:///dev.db"
+'''
+[task.expect]
+type = "answer"
+contains_all = ["8737"]
+[task.example]
+answer = "The dev server listens on port 8737 (config/dev.toml)."
+
+[[task]]
+id = "ftc06"
+tools = ["read_file", "edit_file", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "Rename the helper calc_total to compute_total everywhere it is used."
+[[task.messages]]
+role = "assistant"
+content = ""
+tool_calls = [{ id = "call_1", name = "search_code", arguments = '{"pattern": "calc_total"}' }]
+[[task.messages]]
+role = "tool"
+tool_call_id = "call_1"
+content = '''
+src/billing.py:10:def calc_total(items):
+src/report.py:3:from billing import calc_total
+src/report.py:22:    total = calc_total(items)
+'''
+[task.expect]
+type = "call"
+[[task.expect.any_of]]
+name = "edit_file"
+args = { path = { contains_any = ["src/billing.py", "src/report.py"] }, old_text = { contains = ["calc_total"] }, new_text = { contains = ["compute_total"] } }
+[[task.expect.any_of]]
+name = "read_file"
+args = { path = { contains_any = ["src/billing.py", "src/report.py"] } }
+[task.example]
+name = "edit_file"
+args = { path = "src/billing.py", old_text = "def calc_total(items):", new_text = "def compute_total(items):" }
+
+[[task]]
+id = "ftc07"
+lite = true
+tools = ["read_file", "write_file", "run_command"]
+[[task.messages]]
+role = "user"
+content = 'Create config/flags.json containing a JSON object with the key "beta" set to true and the key "path" set to the Windows path C:\tools\bin'
+[task.expect]
+type = "call"
+name = "write_file"
+args = { path = { path = "config/flags.json" }, content = { json = { beta = true, path = 'C:\tools\bin' } } }
+[task.example]
+name = "write_file"
+args = { path = "config/flags.json", content = '{"beta": true, "path": "C:\\tools\\bin"}' }
+
+[[task]]
+id = "ftc08"
+tools = ["read_file", "search_code", "run_command"]
+[[task.messages]]
+role = "user"
+content = "Install this Python package in editable mode, including its dev extras."
+[task.expect]
+type = "call"
+[[task.expect.any_of]]
+name = "run_command"
+args = { command = { contains = ["pip install", "-e", "[dev]"] } }
+[[task.expect.any_of]]
+name = "read_file"
+args = { path = { contains_any = ["pyproject.toml", "setup.py", "setup.cfg"] } }
+[task.example]
+name = "run_command"
+args = { command = "pip install -e .[dev]" }

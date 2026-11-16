@@ -1,0 +1,136 @@
+{
+  "ornith-35b": {
+    "flags": {
+      "ctx-size": 131072,
+      "flash-attn": "on",
+      "cache-type-k": "q8_0",
+      "cache-type-v": "q8_0",
+      "ubatch-size": 2048,
+      "parallel": 1,
+      "cache-ram": 4096,
+      "checkpoint-min-step": 2048,
+      "temp": 0.6,
+      "top-p": 0.95,
+      "top-k": 20,
+      "min-p": 0,
+      "reasoning-budget": 1024,
+      "load-mode": "none",
+      "fit-target": 256
+    },
+    "changes_vs_original": "fit-target=256, load-mode=none, reasoning-budget=1024",
+    "tune_score": 88.46,
+    "tune_wall_s": 1153.0,
+    "run_id": "20261116-034219_ornith-35b_it05-speed-calibrated-settings",
+    "held_out": {
+      "baseline": {
+        "score": 65.62,
+        "wall_s": 1913.2
+      },
+      "tuned": {
+        "score": 68.75,
+        "wall_s": 797.4
+      }
+    }
+  },
+  "ornith-9b": {
+    "flags": {
+      "ctx-size": 65536,
+      "flash-attn": "on",
+      "cache-type-k": "q4_0",
+      "cache-type-v": "q4_0",
+      "parallel": 1,
+      "cache-ram": 4096,
+      "checkpoint-min-step": 2048,
+      "temp": 0.6,
+      "top-p": 0.95,
+      "top-k": 20,
+      "min-p": 0,
+      "repeat-penalty": 1.0,
+      "reasoning-budget": 2048,
+      "fit-target": 512
+    },
+    "changes_vs_original": "cache-type-k=q4_0, cache-type-v=q4_0, fit-target=512, reasoning-budget=2048, repeat-penalty=1",
+    "tune_score": 78.85,
+    "tune_wall_s": 1221.6,
+    "run_id": "20261116-090552_ornith-9b_it10-repeat-penalty-off",
+    "held_out": {
+      "baseline": {
+        "score": 71.88,
+        "wall_s": 2105.1
+      },
+      "tuned": {
+        "score": 75.0,
+        "wall_s": 882.4
+      }
+    }
+  },
+  "qwen3.6-35b": {
+    "flags": {
+      "ctx-size": 131072,
+      "flash-attn": "on",
+      "cache-type-k": "q8_0",
+      "cache-type-v": "q8_0",
+      "ubatch-size": 4096,
+      "parallel": 1,
+      "cache-ram": 4096,
+      "checkpoint-min-step": 2048,
+      "temp": 0.6,
+      "top-p": 0.95,
+      "top-k": 20,
+      "min-p": 0,
+      "reasoning-budget": 1024,
+      "threads": 12,
+      "load-mode": "none",
+      "batch-size": 4096,
+      "fit-target": 256
+    },
+    "changes_vs_original": "batch-size=4096, fit-target=256, load-mode=none, reasoning-budget=1024, threads=12, ubatch-size=4096",
+    "tune_score": 88.46,
+    "tune_wall_s": 1421.3,
+    "run_id": "20261116-044505_qwen3.6-35b_it05-speed-calibrated-settings",
+    "tune_score_averaged": 90.38499999999999,
+    "held_out": {
+      "baseline": {
+        "score": 62.5,
+        "wall_s": 3114.7
+      },
+      "tuned": {
+        "score": 81.25,
+        "wall_s": 894.1
+      }
+    }
+  },
+  "qwen3.8-27b": {
+    "flags": {
+      "ctx-size": 32768,
+      "flash-attn": "on",
+      "cache-type-k": "q8_0",
+      "cache-type-v": "q8_0",
+      "ubatch-size": 1024,
+      "parallel": 1,
+      "cache-ram": 4096,
+      "checkpoint-min-step": 2048,
+      "temp": 1.0,
+      "top-p": 0.95,
+      "top-k": 20,
+      "min-p": 0,
+      "reasoning": "off",
+      "threads": 20,
+      "fit-target": 256
+    },
+    "changes_vs_original": "fit-target=256, reasoning=off, threads=20",
+    "tune_score": 100.0,
+    "tune_wall_s": 1850.8,
+    "run_id": "20261116-011749_qwen3.8-27b_it03-speed-calibrated-settings",
+    "held_out": {
+      "baseline": {
+        "score": 75.0,
+        "wall_s": 4510.8
+      },
+      "tuned": {
+        "score": 100.0,
+        "wall_s": 1290.8
+      }
+    }
+  }
+}

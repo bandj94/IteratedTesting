@@ -1,0 +1,5 @@
+# Keep every text file byte-identical on all platforms: the tuner fingerprints the task files, and the
+# benchmark tasks (code, tests, long-context sources) must be the same on Windows and Linux.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.svg text eol=lf

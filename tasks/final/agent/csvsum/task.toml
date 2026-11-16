@@ -1,0 +1,5 @@
+weight = 2
+max_turns = 14
+prompt = '''
+column_total in report.py does not do what its docstring says, and the tests in tests/ fail. Fix it so that every test passes, without changing the tests.
+'''

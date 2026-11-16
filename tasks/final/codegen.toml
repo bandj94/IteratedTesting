@@ -1,0 +1,611 @@
+# Code generation, held-out ("final") split. Never used while tuning; only `iterbench final` runs it.
+
+[[task]]
+id = "fcg01"
+entry = "resolve_pointer"
+lite = true
+prompt = '''
+Write a Python function `resolve_pointer(doc, pointer: str)` that implements JSON Pointer lookup (RFC 6901) on nested Python dicts and lists.
+
+- The pointer "" refers to the whole document.
+- Otherwise the pointer must start with "/" and is split on "/" into reference tokens. In each token, "~1" means "/" and "~0" means "~" (replace "~1" first, then "~0", so "~01" means "~1"). A "~" that is not followed by "0" or "1" is invalid.
+- For a dict, the token is a key. For a list, the token must be a base-10 index without leading zeros ("0" itself is fine) that is within range.
+- Raise ValueError if the pointer is malformed (does not start with "/", or has a bad "~" escape), KeyError if a dict key is missing, IndexError if a list token is not a valid index or is out of range, and TypeError if a token is applied to a value that is neither a dict nor a list.
+
+Examples:
+resolve_pointer({"a": {"b": [10, 20]}}, "/a/b/1") == 20
+resolve_pointer({"x/y": 2}, "/x~1y") == 2
+'''
+reference = '''
+import re
+
+def resolve_pointer(doc, pointer):
+    if pointer == "":
+        return doc
+    if not pointer.startswith("/"):
+        raise ValueError("a pointer must start with /")
+    cur = doc
+    for raw in pointer[1:].split("/"):
+        if re.search(r"~(?![01])", raw):
+            raise ValueError("bad ~ escape in %r" % raw)
+        token = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(cur, dict):
+            if token not in cur:
+                raise KeyError(token)
+            cur = cur[token]
+        elif isinstance(cur, list):
+            if not re.fullmatch(r"0|[1-9][0-9]*", token) or int(token) >= len(cur):
+                raise IndexError(token)
+            cur = cur[int(token)]
+        else:
+            raise TypeError("cannot index into %s" % type(cur).__name__)
+    return cur
+'''
+tests = '''
+doc = {"a": {"b": [10, 20, {"c": "x"}]}, "m~n": 1, "x/y": 2, "": 3, "arr": []}
+check(lambda: resolve_pointer(doc, ""), doc)
+check(lambda: resolve_pointer(doc, "/a/b/1"), 20)
+check(lambda: resolve_pointer(doc, "/a/b/2/c"), "x")
+check(lambda: resolve_pointer(doc, "/m~0n"), 1)
+check(lambda: resolve_pointer(doc, "/x~1y"), 2)
+check(lambda: resolve_pointer(doc, "/"), 3)
+check(lambda: resolve_pointer({"~1": 5}, "/~01"), 5)
+check(lambda: resolve_pointer({"0": "s"}, "/0"), "s")
+check(lambda: resolve_pointer([[1, 2], [3]], "/1/0"), 3)
+check_raises(lambda: resolve_pointer(doc, "a"), ValueError)
+check_raises(lambda: resolve_pointer(doc, "/a/b/01"), IndexError)
+check_raises(lambda: resolve_pointer(doc, "/a/b/3"), IndexError)
+check_raises(lambda: resolve_pointer(doc, "/a/b/-1"), IndexError)
+check_raises(lambda: resolve_pointer(doc, "/a/b/x"), IndexError)
+check_raises(lambda: resolve_pointer(doc, "/arr/0"), IndexError)
+check_raises(lambda: resolve_pointer(doc, "/zzz"), KeyError)
+check_raises(lambda: resolve_pointer(doc, "/a/~2"), ValueError)
+check_raises(lambda: resolve_pointer(doc, "/m~"), ValueError)
+check_raises(lambda: resolve_pointer(doc, "/a/b/2/c/d"), TypeError)
+'''
+
+[[task]]
+id = "fcg02"
+entry = "allow_requests"
+prompt = '''
+Write a Python function `allow_requests(timestamps: list[float], limit: int, window: float) -> list[bool]` for a sliding-window rate limiter.
+
+Requests arrive at the given times, in non-decreasing order. A request at time t is allowed if fewer than `limit` previously *allowed* requests have times in the half-open interval (t - window, t]. Rejected requests do not count. Return one boolean per request.
+
+Example:
+allow_requests([0, 0.5, 1, 2.5], 2, 2) == [True, True, False, True]
+'''
+reference = '''
+from collections import deque
+
+def allow_requests(timestamps, limit, window):
+    allowed = deque()
+    out = []
+    for t in timestamps:
+        while allowed and allowed[0] <= t - window:
+            allowed.popleft()
+        if len(allowed) < limit:
+            allowed.append(t)
+            out.append(True)
+        else:
+            out.append(False)
+    return out
+'''
+tests = '''
+check(lambda: allow_requests([0, 0.5, 1, 2.5], 2, 2), [True, True, False, True])
+check(lambda: allow_requests([], 3, 1), [])
+check(lambda: allow_requests([1, 1, 1, 1], 2, 5), [True, True, False, False])
+check(lambda: allow_requests([0, 1, 2, 3, 4], 1, 1), [True, True, True, True, True])
+check(lambda: allow_requests([0, 0.5, 1, 1.5], 1, 1), [True, False, True, False])
+check(lambda: allow_requests([5, 6, 7], 0, 10), [False, False, False])
+check(lambda: allow_requests([0, 1, 2, 3, 4, 5], 3, 3), [True] * 6)
+check(lambda: allow_requests([0, 0, 0, 1, 2, 3, 3.5], 2, 3), [True, True, False, False, False, True, True])
+'''
+
+[[task]]
+id = "fcg03"
+entry = "topo_order"
+prompt = '''
+Write a Python function `topo_order(deps: dict[str, list[str]]) -> list[str]`.
+
+`deps[x]` lists the tasks that must come before task x. Every task that appears anywhere (as a key or inside a list) must be in the result. Return an order that respects all dependencies; whenever several tasks are ready, take the alphabetically smallest one first. Raise ValueError if the dependencies contain a cycle (including a task that depends on itself).
+
+Example:
+topo_order({"b": ["a"], "c": ["a"], "a": []}) == ["a", "b", "c"]
+'''
+reference = '''
+import heapq
+
+def topo_order(deps):
+    nodes = set(deps)
+    for ds in deps.values():
+        nodes.update(ds)
+    indeg = {n: 0 for n in nodes}
+    children = {n: set() for n in nodes}
+    for n, ds in deps.items():
+        for d in set(ds):
+            if d == n:
+                raise ValueError("%s depends on itself" % n)
+            children[d].add(n)
+            indeg[n] += 1
+    heap = [n for n in nodes if indeg[n] == 0]
+    heapq.heapify(heap)
+    out = []
+    while heap:
+        n = heapq.heappop(heap)
+        out.append(n)
+        for c in children[n]:
+            indeg[c] -= 1
+            if indeg[c] == 0:
+                heapq.heappush(heap, c)
+    if len(out) != len(nodes):
+        raise ValueError("cycle")
+    return out
+'''
+tests = '''
+check(lambda: topo_order({"b": ["a"], "c": ["a"], "a": []}), ["a", "b", "c"])
+check(lambda: topo_order({}), [])
+check(lambda: topo_order({"z": []}), ["z"])
+check(lambda: topo_order({"c": ["b"], "b": ["a"]}), ["a", "b", "c"])
+check(lambda: topo_order({"d": ["b", "c"], "b": ["a"], "c": ["a"]}), ["a", "b", "c", "d"])
+check(lambda: topo_order({"x": ["y"], "a": []}), ["a", "y", "x"])
+check(lambda: topo_order({"b": [], "a": ["c"], "c": []}), ["b", "c", "a"])
+check(lambda: topo_order({"m": ["k", "k"], "k": []}), ["k", "m"])
+check_raises(lambda: topo_order({"a": ["b"], "b": ["a"]}), ValueError)
+check_raises(lambda: topo_order({"a": ["a"]}), ValueError)
+check_raises(lambda: topo_order({"a": ["b"], "b": ["c"], "c": ["a"], "d": []}), ValueError)
+'''
+
+[[task]]
+id = "fcg04"
+entry = "bowling_score"
+prompt = '''
+Write a Python function `bowling_score(rolls: list[int]) -> int` that scores one complete game of ten-pin bowling.
+
+- A game has 10 frames. In frames 1-9, a strike (10 pins on the first roll) ends the frame; otherwise the frame has two rolls whose sum is at most 10.
+- A strike scores 10 plus the next two rolls. A spare (two rolls summing to 10) scores 10 plus the next roll.
+- Frame 10: if it starts with a strike or is a spare, it has a third roll; otherwise it has two rolls. After a strike in frame 10, if the second roll is not a strike, the second and third rolls together must be at most 10.
+
+Validate the input: every roll is an int from 0 to 10, the pin counts within each frame are possible, and the number of rolls is exactly right for one complete game. Raise ValueError otherwise.
+
+Examples: twelve strikes score 300; twenty zeros score 0.
+'''
+reference = '''
+def bowling_score(rolls):
+    for r in rolls:
+        if not isinstance(r, int) or isinstance(r, bool) or not 0 <= r <= 10:
+            raise ValueError("invalid roll %r" % (r,))
+    frames, i = [], 0
+    for _ in range(9):
+        if i >= len(rolls):
+            raise ValueError("too few rolls")
+        if rolls[i] == 10:
+            frames.append([10])
+            i += 1
+        else:
+            if i + 1 >= len(rolls):
+                raise ValueError("too few rolls")
+            if rolls[i] + rolls[i + 1] > 10:
+                raise ValueError("too many pins in a frame")
+            frames.append(rolls[i:i + 2])
+            i += 2
+    last = rolls[i:]
+    if len(last) < 2:
+        raise ValueError("too few rolls")
+    a, b = last[0], last[1]
+    if a == 10 or a + b == 10:
+        if len(last) != 3:
+            raise ValueError("frame 10 needs exactly three rolls")
+        if a == 10 and b != 10 and b + last[2] > 10:
+            raise ValueError("too many pins in frame 10")
+    else:
+        if a + b > 10:
+            raise ValueError("too many pins in frame 10")
+        if len(last) != 2:
+            raise ValueError("frame 10 needs exactly two rolls")
+    score, i = 0, 0
+    for f in frames:
+        if f == [10]:
+            score += 10 + rolls[i + 1] + rolls[i + 2]
+            i += 1
+        elif sum(f) == 10:
+            score += 10 + rolls[i + 2]
+            i += 2
+        else:
+            score += sum(f)
+            i += 2
+    return score + sum(last)
+'''
+tests = '''
+check(lambda: bowling_score([10] * 12), 300)
+check(lambda: bowling_score([0] * 20), 0)
+check(lambda: bowling_score([5, 5] * 10 + [5]), 150)
+check(lambda: bowling_score([9, 0] * 10), 90)
+check(lambda: bowling_score([10, 7, 3, 9, 0, 10, 0, 8, 8, 2, 0, 6, 10, 10, 10, 8, 1]), 167)
+check(lambda: bowling_score([0] * 18 + [10, 10, 10]), 30)
+check(lambda: bowling_score([0] * 18 + [7, 3, 5]), 15)
+check(lambda: bowling_score([0] * 18 + [10, 3, 7]), 20)
+check(lambda: bowling_score([0] * 18 + [7, 3, 10]), 20)
+check_raises(lambda: bowling_score([0] * 19), ValueError)
+check_raises(lambda: bowling_score([0] * 21), ValueError)
+check_raises(lambda: bowling_score([6, 5] + [0] * 18), ValueError)
+check_raises(lambda: bowling_score([0] * 18 + [3, 4, 5]), ValueError)
+check_raises(lambda: bowling_score([0] * 18 + [10, 3, 8]), ValueError)
+check_raises(lambda: bowling_score([11] + [0] * 19), ValueError)
+check_raises(lambda: bowling_score([10] * 13), ValueError)
+check_raises(lambda: bowling_score([-1, 1] + [0] * 18), ValueError)
+'''
+
+[[task]]
+id = "fcg05"
+entry = "spiral_fill"
+prompt = '''
+Write a Python function `spiral_fill(rows: int, cols: int, clockwise: bool = True) -> list[list[int]]`.
+
+Fill a rows x cols grid with the numbers 1 to rows*cols along a spiral that starts in the top-left cell and winds inward. When `clockwise` is True the first move is to the right; when it is False the first move is down (counter-clockwise). rows and cols are at least 1.
+
+Examples:
+spiral_fill(3, 3) == [[1, 2, 3], [8, 9, 4], [7, 6, 5]]
+spiral_fill(3, 3, clockwise=False) == [[1, 8, 7], [2, 9, 6], [3, 4, 5]]
+'''
+reference = '''
+def spiral_fill(rows, cols, clockwise=True):
+    grid = [[0] * cols for _ in range(rows)]
+    dirs = [(0, 1), (1, 0), (0, -1), (-1, 0)] if clockwise else [(1, 0), (0, 1), (-1, 0), (0, -1)]
+    r = c = d = 0
+    for k in range(1, rows * cols + 1):
+        grid[r][c] = k
+        dr, dc = dirs[d]
+        nr, nc = r + dr, c + dc
+        if not (0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] == 0):
+            d = (d + 1) % 4
+            dr, dc = dirs[d]
+            nr, nc = r + dr, c + dc
+        r, c = nr, nc
+    return grid
+'''
+tests = '''
+check(lambda: spiral_fill(3, 3), [[1, 2, 3], [8, 9, 4], [7, 6, 5]])
+check(lambda: spiral_fill(3, 3, clockwise=False), [[1, 8, 7], [2, 9, 6], [3, 4, 5]])
+check(lambda: spiral_fill(1, 1), [[1]])
+check(lambda: spiral_fill(1, 4), [[1, 2, 3, 4]])
+check(lambda: spiral_fill(4, 1), [[1], [2], [3], [4]])
+check(lambda: spiral_fill(2, 3), [[1, 2, 3], [6, 5, 4]])
+check(lambda: spiral_fill(3, 2), [[1, 2], [6, 3], [5, 4]])
+check(lambda: spiral_fill(2, 3, clockwise=False), [[1, 6, 5], [2, 3, 4]])
+check(lambda: spiral_fill(3, 4), [[1, 2, 3, 4], [10, 11, 12, 5], [9, 8, 7, 6]])
+check(lambda: spiral_fill(4, 3, clockwise=False), [[1, 10, 9], [2, 11, 8], [3, 12, 7], [4, 5, 6]])
+check(lambda: spiral_fill(1, 3, clockwise=False), [[1, 2, 3]])
+'''
+
+[[task]]
+id = "fcg06"
+entry = "group_anagrams"
+prompt = '''
+Write a Python function `group_anagrams(words: list[str]) -> list[list[str]]`.
+
+Two words are anagrams if they contain the same letters with the same counts, ignoring case. Group the words, keeping each word exactly as given (including duplicates). Sort the words inside each group with plain string comparison. Sort the groups by size, largest first, and break ties by the group's first word (after sorting the group). Return the list of groups.
+
+Example:
+group_anagrams(["Listen", "silent", "enlist", "google", "gogole", "cat"]) == [["Listen", "enlist", "silent"], ["gogole", "google"], ["cat"]]
+'''
+reference = '''
+def group_anagrams(words):
+    groups = {}
+    for w in words:
+        groups.setdefault("".join(sorted(w.lower())), []).append(w)
+    result = [sorted(g) for g in groups.values()]
+    result.sort(key=lambda g: (-len(g), g[0]))
+    return result
+'''
+tests = '''
+check(lambda: group_anagrams(["Listen", "silent", "enlist", "google", "gogole", "cat"]), [["Listen", "enlist", "silent"], ["gogole", "google"], ["cat"]])
+check(lambda: group_anagrams([]), [])
+check(lambda: group_anagrams(["a"]), [["a"]])
+check(lambda: group_anagrams(["ab", "ba", "ab"]), [["ab", "ab", "ba"]])
+check(lambda: group_anagrams(["b", "a", "c"]), [["a"], ["b"], ["c"]])
+check(lambda: group_anagrams(["Tar", "rat", "art", "Elbow", "below", "x"]), [["Tar", "art", "rat"], ["Elbow", "below"], ["x"]])
+check(lambda: group_anagrams(["dog", "god", "cat", "act"]), [["act", "cat"], ["dog", "god"]])
+check(lambda: group_anagrams(["", ""]), [["", ""]])
+'''
+
+[[task]]
+id = "fcg07"
+entry = "merge_with_gap"
+prompt = '''
+Write a Python function `merge_with_gap(intervals: list[tuple[int, int]], max_gap: int) -> list[tuple[int, int]]`.
+
+Each interval is a closed interval (start, end) with start <= end. Sort the intervals and merge any two whose gap is at most max_gap, where the gap between [a, b] and a later-starting [c, d] is c - b (overlapping intervals have a gap of zero or less and always merge). Return the merged intervals as tuples sorted by start. max_gap >= 0. Raise ValueError if any interval has start > end.
+
+Examples:
+merge_with_gap([(1, 3), (6, 8), (4, 5)], 1) == [(1, 8)]
+merge_with_gap([(1, 3), (6, 8)], 1) == [(1, 3), (6, 8)]
+'''
+reference = '''
+def merge_with_gap(intervals, max_gap):
+    for s, e in intervals:
+        if s > e:
+            raise ValueError("start > end")
+    out = []
+    for s, e in sorted(intervals):
+        if out and s - out[-1][1] <= max_gap:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+'''
+tests = '''
+check(lambda: merge_with_gap([(1, 3), (6, 8), (4, 5)], 1), [(1, 8)])
+check(lambda: merge_with_gap([(1, 3), (6, 8)], 1), [(1, 3), (6, 8)])
+check(lambda: merge_with_gap([], 5), [])
+check(lambda: merge_with_gap([(5, 5)], 0), [(5, 5)])
+check(lambda: merge_with_gap([(1, 10), (2, 3)], 0), [(1, 10)])
+check(lambda: merge_with_gap([(1, 2), (3, 4)], 0), [(1, 2), (3, 4)])
+check(lambda: merge_with_gap([(1, 2), (2, 4)], 0), [(1, 4)])
+check(lambda: merge_with_gap([(10, 12), (1, 2), (4, 5), (7, 8)], 2), [(1, 12)])
+check(lambda: merge_with_gap([(10, 12), (1, 2), (4, 5), (7, 8)], 1), [(1, 2), (4, 5), (7, 8), (10, 12)])
+check(lambda: merge_with_gap([(0, 100), (50, 60), (103, 104)], 3), [(0, 104)])
+check(lambda: merge_with_gap([(-5, -3), (-1, 0)], 2), [(-5, 0)])
+check_raises(lambda: merge_with_gap([(3, 1)], 0), ValueError)
+'''
+
+[[task]]
+id = "fcg08"
+entry = "next_run"
+lite = true
+prompt = '''
+Write a Python function `next_run(spec: str, after: int) -> int` for a tiny cron-like schedule.
+
+`spec` has exactly two fields separated by a single space, "MINUTE HOUR". Each field is one of:
+- "*" (every value),
+- "*/n" (every n-th value starting at 0, n >= 1),
+- a number,
+- a range "a-b" (inclusive, a <= b),
+- or a comma-separated list of numbers and ranges (for example "0,15,30-35").
+Minutes are 0-59 and hours are 0-23.
+
+`after` is a minute of the day (0-1439). Return the first minute strictly after `after` that matches both fields, counted from the start of the current day; if the next match is on the following day, the result is >= 1440 (for example 1440 + 30 for 00:30 tomorrow). Raise ValueError for a malformed spec or out-of-range values.
+
+Examples:
+next_run("30 *", 0) == 30
+next_run("0 9", 540) == 1440 + 540
+next_run("*/15 10-11", 600) == 615
+'''
+reference = '''
+import re
+
+def _field(text, lo, hi):
+    if text == "*":
+        return set(range(lo, hi + 1))
+    m = re.fullmatch(r"\*/([0-9]+)", text)
+    if m:
+        n = int(m.group(1))
+        if n < 1:
+            raise ValueError("step must be >= 1")
+        return set(range(lo, hi + 1, n))
+    out = set()
+    for part in text.split(","):
+        m = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", part)
+        if not m:
+            raise ValueError("bad field part %r" % part)
+        a = int(m.group(1))
+        b = int(m.group(2)) if m.group(2) is not None else a
+        if a > b or a < lo or b > hi:
+            raise ValueError("value out of range")
+        out.update(range(a, b + 1))
+    return out
+
+def next_run(spec, after):
+    parts = spec.split(" ")
+    if len(parts) != 2:
+        raise ValueError("expected MINUTE HOUR")
+    minutes = _field(parts[0], 0, 59)
+    hours = _field(parts[1], 0, 23)
+    for t in range(after + 1, after + 1 + 2 * 1440):
+        day_minute = t % 1440
+        if day_minute // 60 in hours and day_minute % 60 in minutes:
+            return t
+    raise ValueError("no match")
+'''
+tests = '''
+check(lambda: next_run("30 *", 0), 30)
+check(lambda: next_run("0 9", 540), 1980)
+check(lambda: next_run("0 9", 539), 540)
+check(lambda: next_run("*/15 10-11", 600), 615)
+check(lambda: next_run("*/15 10-11", 705), 2040)
+check(lambda: next_run("* *", 1439), 1440)
+check(lambda: next_run("5,10 0", 5), 10)
+check(lambda: next_run("0,15,30-32 1", 91), 92)
+check(lambda: next_run("59 23", 0), 1439)
+check(lambda: next_run("*/25 *", 50), 60)
+for bad in ["60 *", "* 24", "*/0 *", "5-3 *", "*", "1,,2 *", "a *", "* * *", "-1 *"]:
+    check_raises((lambda b=bad: next_run(b, 0)), ValueError, label=repr(bad))
+'''
+
+[[task]]
+id = "fcg09"
+entry = "diff_dicts"
+prompt = '''
+Write a Python function `diff_dicts(old: dict, new: dict) -> list[str]` that describes the changes between two nested dicts (string keys; values may be dicts or other JSON-like values) using dotted key paths:
+- "+path" for a key that exists only in new,
+- "-path" for a key that exists only in old,
+- "~path: OLD -> NEW" for a key whose value changed, where OLD and NEW are written with repr().
+
+If a key holds a dict in both old and new, recurse into it instead of reporting it as changed. If it holds a dict on only one side, report a change of the whole value. A key that exists on only one side is reported once, even if its value is a dict. Return the lines sorted by path (plain string order of the dotted path, without the leading symbol).
+
+Example:
+diff_dicts({"a": 1, "b": {"c": 2, "d": 3}}, {"a": 1, "b": {"c": 5}, "e": 0}) == ["~b.c: 2 -> 5", "-b.d", "+e"]
+'''
+reference = '''
+def diff_dicts(old, new):
+    out = []
+
+    def walk(a, b, prefix):
+        for k in set(a) | set(b):
+            path = prefix + str(k)
+            if k not in b:
+                out.append((path, "-" + path))
+            elif k not in a:
+                out.append((path, "+" + path))
+            elif isinstance(a[k], dict) and isinstance(b[k], dict):
+                walk(a[k], b[k], path + ".")
+            elif a[k] != b[k]:
+                out.append((path, "~%s: %r -> %r" % (path, a[k], b[k])))
+
+    walk(old, new, "")
+    return [line for _, line in sorted(out)]
+'''
+tests = '''
+check(lambda: diff_dicts({"a": 1, "b": {"c": 2, "d": 3}}, {"a": 1, "b": {"c": 5}, "e": 0}), ["~b.c: 2 -> 5", "-b.d", "+e"])
+check(lambda: diff_dicts({}, {}), [])
+check(lambda: diff_dicts({"x": 1}, {"x": 1}), [])
+check(lambda: diff_dicts({"x": {"y": 1}}, {"x": 5}), ["~x: {'y': 1} -> 5"])
+check(lambda: diff_dicts({"s": "a"}, {"s": "b"}), ["~s: 'a' -> 'b'"])
+check(lambda: diff_dicts({"a": {"b": {"c": 1}}}, {"a": {"b": {"c": 1, "d": 2}}}), ["+a.b.d"])
+check(lambda: diff_dicts({"k": [1, 2]}, {"k": [1, 2, 3]}), ["~k: [1, 2] -> [1, 2, 3]"])
+check(lambda: diff_dicts({"b": 1, "a": 2}, {}), ["-a", "-b"])
+check(lambda: diff_dicts({}, {"a1": 0, "a": {"b": 0}}), ["+a", "+a1"])
+check(lambda: diff_dicts({"a": {"z": 1, "b": 2}}, {"a": {"z": 2, "b": 2, "c": {}}}), ["+a.c", "~a.z: 1 -> 2"])
+'''
+
+[[task]]
+id = "fcg10"
+entry = "rotate"
+prompt = '''
+Write a Python function `rotate(matrix: list[list[int]], k: int) -> list[list[int]]` that rotates a rectangular matrix by k quarter turns clockwise. k may be negative (counter-clockwise) or larger than 3. Always return a new matrix and never modify the input. An empty matrix ([]) stays [].
+
+Example:
+rotate([[1, 2, 3], [4, 5, 6]], 1) == [[4, 1], [5, 2], [6, 3]]
+'''
+reference = '''
+def rotate(matrix, k):
+    m = [list(row) for row in matrix]
+    for _ in range(k % 4):
+        m = [list(row) for row in zip(*m[::-1])]
+    return m
+'''
+tests = '''
+m = [[1, 2, 3], [4, 5, 6]]
+check(lambda: rotate(m, 1), [[4, 1], [5, 2], [6, 3]])
+check(lambda: rotate(m, 2), [[6, 5, 4], [3, 2, 1]])
+check(lambda: rotate(m, 3), [[3, 6], [2, 5], [1, 4]])
+check(lambda: rotate(m, -1), [[3, 6], [2, 5], [1, 4]])
+check(lambda: rotate(m, 4), [[1, 2, 3], [4, 5, 6]])
+check(lambda: rotate(m, 9), [[4, 1], [5, 2], [6, 3]])
+check(lambda: rotate(m, -6), [[6, 5, 4], [3, 2, 1]])
+check(lambda: rotate([], 1), [])
+check(lambda: rotate([[7]], 3), [[7]])
+check(lambda: rotate([[1], [2], [3]], 1), [[3, 2, 1]])
+check(lambda: (rotate(m, 1), m)[1], [[1, 2, 3], [4, 5, 6]])
+check(lambda: rotate(m, 0) is not m and rotate(m, 0)[0] is not m[0], True)
+'''
+
+[[task]]
+id = "fcg11"
+entry = ["encode_sint", "decode_sint"]
+prompt = '''
+Write two Python functions, `encode_sint(n: int) -> bytes` and `decode_sint(data: bytes) -> int`, for signed integers.
+
+Encoding: first map n with ZigZag (0 -> 0, -1 -> 1, 1 -> 2, -2 -> 3, 2 -> 4, ...; that is 2n for n >= 0 and -2n - 1 for n < 0), then write the result as an unsigned LEB128 varint: 7 bits per byte, least significant group first, with the high bit (0x80) set on every byte except the last.
+
+decode_sint reverses this. Raise ValueError if `data` is empty, if the last byte still has its high bit set (truncated input), or if there are extra bytes after the varint ends. Python integers can be arbitrarily large; support them.
+
+Examples:
+encode_sint(0) == b"\x00"
+encode_sint(-1) == b"\x01"
+encode_sint(64) == b"\x80\x01"
+decode_sint(b"\x80\x01") == 64
+'''
+reference = '''
+def encode_sint(n):
+    z = 2 * n if n >= 0 else -2 * n - 1
+    out = bytearray()
+    while True:
+        b = z & 0x7F
+        z >>= 7
+        if z:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+def decode_sint(data):
+    if not data:
+        raise ValueError("empty input")
+    z = 0
+    for i, b in enumerate(data):
+        z |= (b & 0x7F) << (7 * i)
+        if not b & 0x80:
+            if i != len(data) - 1:
+                raise ValueError("extra bytes after the varint")
+            return z >> 1 if z % 2 == 0 else -((z + 1) >> 1)
+    raise ValueError("truncated varint")
+'''
+tests = '''
+check(lambda: encode_sint(0), b"\x00")
+check(lambda: encode_sint(-1), b"\x01")
+check(lambda: encode_sint(1), b"\x02")
+check(lambda: encode_sint(-64), b"\x7f")
+check(lambda: encode_sint(64), b"\x80\x01")
+check(lambda: encode_sint(-65), b"\x81\x01")
+check(lambda: encode_sint(2**63), b"\x80\x80\x80\x80\x80\x80\x80\x80\x80\x02")
+check(lambda: decode_sint(b"\x80\x01"), 64)
+check(lambda: decode_sint(b"\x7f"), -64)
+check(lambda: decode_sint(b"\x81\x01"), -65)
+check(lambda: all(decode_sint(encode_sint(v)) == v for v in [0, 1, -1, 300, -300, 2**31, -2**31, 2**63, -(2**63) - 1, 10**30, -(10**30)]), True)
+check_raises(lambda: decode_sint(b""), ValueError)
+check_raises(lambda: decode_sint(b"\x80"), ValueError)
+check_raises(lambda: decode_sint(b"\x01\x00"), ValueError)
+'''
+
+[[task]]
+id = "fcg12"
+entry = "longest_balanced"
+prompt = '''
+Write a Python function `longest_balanced(s: str) -> tuple[int, int]`.
+
+`s` consists only of the characters "a" and "b". Find the longest contiguous substring that has as many "a"s as "b"s and return (start, length). If several have the maximum length, return the one with the smallest start. If there is none (including when s is empty), return (0, 0). s can be up to 100000 characters long, so the solution must run in about linear time.
+
+Example:
+longest_balanced("aabab") == (1, 4)
+'''
+reference = '''
+def longest_balanced(s):
+    first = {0: 0}
+    bal = 0
+    best = (0, 0)
+    for i, ch in enumerate(s, 1):
+        bal += 1 if ch == "a" else -1
+        if bal in first:
+            length = i - first[bal]
+            if length > best[1]:
+                best = (first[bal], length)
+        else:
+            first[bal] = i
+    return best
+'''
+tests = '''
+import random as _random
+
+def _ref(s):
+    for length in range(len(s) - len(s) % 2, 0, -2):
+        for i in range(len(s) - length + 1):
+            part = s[i:i + length]
+            if part.count("a") == part.count("b"):
+                return (i, length)
+    return (0, 0)
+
+check(lambda: longest_balanced("aabab"), (1, 4))
+check(lambda: longest_balanced(""), (0, 0))
+check(lambda: longest_balanced("aaa"), (0, 0))
+check(lambda: longest_balanced("ab"), (0, 2))
+check(lambda: longest_balanced("ba"), (0, 2))
+check(lambda: longest_balanced("aabb"), (0, 4))
+check(lambda: longest_balanced("bbbab"), (2, 2))
+_rng = _random.Random(5)
+for _case in range(30):
+    _s = "".join(_rng.choice("ab") for _ in range(_rng.randint(1, 14)))
+    check((lambda s=_s: longest_balanced(s)), _ref(_s), label=repr(_s))
+check(lambda: longest_balanced("ab" * 50000), (0, 100000), label="long")
+check(lambda: longest_balanced("a" * 50000 + "b" * 49999), (1, 99998), label="long uneven")
+'''

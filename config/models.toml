@@ -1,0 +1,182 @@
+# Models under test, their original launcher settings, and the tuning search space.
+#
+# Machine-specific paths live in config/local.toml (gitignored); see config/local.example.toml.
+# Flags are llama-server long options without the leading "--" (true = bare flag).
+# The harness always adds: -m <file> --alias <name> --host --port --metrics --no-webui.
+
+[server]
+host = "127.0.0.1"
+port = 8090                 # not 8080, so it never collides with a launcher you started by hand
+startup_timeout_s = 900
+
+[tuning]
+max_iterations = 20         # 1 iteration = 1 benchmark run per model that is still tuning
+tolerance_pts = 4.0         # accuracy differences smaller than this count as a tie (noise)
+speed_margin = 0.05         # among ties, a config must be >=5% faster to replace the incumbent
+probe_margin = 0.02         # speed calibration: >=2% faster per agent turn to adopt a setting
+speed_run_slack = 0.10      # the speed-calibrated run is kept unless it is >10% slower than the pick
+
+# --------------------------------------------------------------------------------------------
+# Models. `baseline` copies the start-*.bat launcher exactly (except --port/--metrics/--alias).
+
+[models."ornith-35b"]
+file = "ornith-35b/Ornith-1.5-35B-A3B-Heretic-MTP-APEX-I-Compact.gguf"
+suite = "full"
+notes = "Daily driver. qwen35moe, 35B total / 3B active, APEX I-Compact 17.3 GB."
+[models."ornith-35b".baseline]
+ctx-size = 131072
+flash-attn = "on"
+cache-type-k = "q8_0"
+cache-type-v = "q8_0"
+ubatch-size = 2048
+parallel = 1
+cache-ram = 4096
+checkpoint-min-step = 2048
+temp = 0.6
+top-p = 0.95
+top-k = 20
+min-p = 0
+
+[models."ornith-9b"]
+file = "ornith-9b/Ornith-1.5-9B-heretic-Q4_K_M.gguf"
+suite = "full"
+notes = "qwen35 dense 9B, Q4_K_M 5.6 GB, fits on the GPU."
+[models."ornith-9b".baseline]
+ctx-size = 65536
+flash-attn = "on"
+cache-type-k = "q8_0"
+cache-type-v = "q8_0"
+parallel = 1
+cache-ram = 4096
+checkpoint-min-step = 2048
+temp = 0.6
+top-p = 0.95
+top-k = 20
+min-p = 0
+repeat-penalty = 1.05
+[models."ornith-9b".search]
+dims = ["reasoning", "speed", "sampling", "kv", "repeat-penalty"]
+
+[models."qwen3.6-35b"]
+file = "qwen3.6-35b/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf"
+suite = "full"
+notes = "qwen35moe, Q4_K_M 21.8 GB; tight on 32 GB RAM."
+[models."qwen3.6-35b".baseline]
+ctx-size = 131072
+flash-attn = "on"
+cache-type-k = "q8_0"
+cache-type-v = "q8_0"
+ubatch-size = 2048
+parallel = 1
+cache-ram = 4096
+checkpoint-min-step = 2048
+temp = 0.6
+top-p = 0.95
+top-k = 20
+min-p = 0
+
+[models."qwen3.8-27b"]
+file = "qwen3.8-27b/RVN-Qwen3.8-27B-Heretic-GSQ-RCO-IQ3_S-mtp.gguf"
+# ~3 tok/s on this laptop, so it runs the "lite" subset and has a smaller iteration cap.
+suite = "lite"
+max_iterations = 5
+max_tokens_scale = 0.5
+probe_tokens = [48, 64]
+notes = "qwen35 dense 27B, IQ3_S 12.3 GB, about half on the CPU."
+[models."qwen3.8-27b".baseline]
+ctx-size = 32768
+flash-attn = "on"
+cache-type-k = "q8_0"
+cache-type-v = "q8_0"
+ubatch-size = 1024
+parallel = 1
+cache-ram = 4096
+checkpoint-min-step = 2048
+temp = 1.0
+top-p = 0.95
+top-k = 20
+min-p = 0
+[models."qwen3.8-27b".search]
+dims = ["reasoning", "speed", "kv"]
+only = { reasoning = ["thinking off", "budget 1024"], kv = ["KV q4_0"] }
+
+# --------------------------------------------------------------------------------------------
+# Phase 1: speed calibration. Settings that do not change the model's answers, measured with a
+# short speed probe (no accuracy benchmark). Applied in this order, keeping each winner.
+
+[[search.speed_dims]]
+name = "threads"
+variants = [
+  { label = "6 threads (P-cores)", set = { threads = 6 } },
+  { label = "8 threads", set = { threads = 8 } },
+  { label = "10 threads", set = { threads = 10 } },
+  { label = "12 threads", set = { threads = 12 } },
+  { label = "20 threads", set = { threads = 20 } },
+]
+
+[[search.speed_dims]]
+name = "load-mode"
+variants = [
+  { label = "load-mode none (no mmap)", set = { load-mode = "none" } },
+]
+
+[[search.speed_dims]]
+name = "ubatch"
+variants = [
+  { label = "ubatch 512", set = { ubatch-size = 512 } },
+  { label = "ubatch 1024", set = { ubatch-size = 1024 } },
+  { label = "ubatch 2048", set = { ubatch-size = 2048 } },
+  { label = "ubatch 4096", set = { ubatch-size = 4096, batch-size = 4096 } },
+]
+
+[[search.speed_dims]]
+name = "fit-target"
+variants = [
+  { label = "fit margin 512 MiB", set = { fit-target = 512 } },
+  { label = "fit margin 256 MiB", set = { fit-target = 256 } },
+]
+
+# --------------------------------------------------------------------------------------------
+# Phase 2: settings that can change answers. Each variant costs one full benchmark iteration.
+# mode = "first_accept": variants are ordered fastest first; stop at the first one accepted.
+# mode = "best": try every variant and keep the best by the selection rule.
+# reference = "<label>": run that variant first; being accepted does not end the dimension.
+
+[search.dims.reasoning]
+mode = "first_accept"
+# Every task has a fixed output cap (8192 tokens for coding tasks), and the baselines often hit it while
+# still thinking, so they understate the model. Budget 4096 runs first: the model must answer in time,
+# which shows the accuracy the faster options have to match. Models whose `only` list leaves out
+# budget 4096 (the 27B) skip the reference.
+reference = "budget 4096"
+variants = [
+  { label = "thinking off", set = { reasoning = "off" } },
+  { label = "budget 1024", set = { reasoning-budget = 1024 } },
+  { label = "budget 2048", set = { reasoning-budget = 2048 } },
+  { label = "budget 4096", set = { reasoning-budget = 4096 } },
+]
+
+[search.dims.sampling]
+mode = "best"
+variants = [
+  { label = "vendor thinking preset (temp 1.0, presence 1.5)", when = "thinking", set = { temp = 1.0, top-p = 0.95, top-k = 20, min-p = 0, presence-penalty = 1.5 } },
+  { label = "vendor non-thinking preset (temp 0.7, top-p 0.8, presence 1.5)", when = "no_thinking", set = { temp = 0.7, top-p = 0.8, top-k = 20, min-p = 0, presence-penalty = 1.5 } },
+]
+
+[search.dims.kv]
+mode = "best"
+variants = [
+  { label = "KV q4_0", set = { cache-type-k = "q4_0", cache-type-v = "q4_0" } },
+  { label = "KV f16", set = { cache-type-k = "f16", cache-type-v = "f16" } },
+]
+
+[search.dims.repeat-penalty]
+mode = "best"
+variants = [
+  { label = "repeat-penalty off", set = { repeat-penalty = 1.0 } },
+]
+
+[search]
+# Order matters: thinking settings first (they change run time the most), then speed calibration
+# ("speed" = probes + one benchmark run), then the rest.
+default_dims = ["reasoning", "speed", "sampling", "kv"]

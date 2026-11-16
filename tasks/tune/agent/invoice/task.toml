@@ -1,0 +1,5 @@
+weight = 2
+max_turns = 14
+prompt = '''
+The tests in tests/ are failing. Find and fix the bugs in the source code so that every test passes. Do not modify the tests.
+'''

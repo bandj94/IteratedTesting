@@ -1,0 +1,5 @@
+weight = 2
+max_turns = 14
+prompt = '''
+Make stats.py behave exactly as described in README.md. The tests in tests/ show what is expected and currently fail. Make every test pass without changing the tests.
+'''

@@ -1,0 +1,22 @@
+# Long-context tracing, tuning split. Each [[context]] is a generated code base (see
+# iterbench/graders/longctx.py) of about `target_tokens` tokens; `questions` questions are asked about
+# it, one request each (the second request reuses the server's prompt cache).
+
+[[context]]
+id = "lc08k"
+seed = 101
+target_tokens = 8000
+questions = 2
+lite = true
+
+[[context]]
+id = "lc16k"
+seed = 202
+target_tokens = 16000
+questions = 2
+
+[[context]]
+id = "lc24k"
+seed = 303
+target_tokens = 24000
+questions = 2

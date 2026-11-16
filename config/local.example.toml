@@ -1,0 +1,7 @@
+# Copy this file to config/local.toml and point it at your own files. local.toml is gitignored.
+
+[paths]
+# llama-server binary (any recent llama.cpp build with --fit and --reasoning-budget).
+server_exe = "C:/path/to/llama.cpp/llama-server.exe"
+# Folder that holds the model files named in models.toml (`file` is relative to this folder).
+models_dir = "C:/path/to/models"

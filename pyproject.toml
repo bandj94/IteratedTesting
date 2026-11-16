@@ -1,0 +1,18 @@
+[project]
+name = "iterbench"
+version = "0.1.0"
+description = "Benchmark local llama.cpp models on coding-agent tasks and tune their launch settings for the best speed/accuracy trade-off."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+iterbench = "iterbench.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["iterbench", "iterbench.graders"]
